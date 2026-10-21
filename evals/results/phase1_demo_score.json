@@ -1,0 +1,43 @@
+{
+  "micro_precision": 1.0,
+  "micro_recall": 1.0,
+  "verdict_accuracy": 1.0,
+  "cases": [
+    {
+      "id": "EC-01",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "id": "EC-02",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "id": "EC-04",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "id": "EC-11",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+--- a/app/services/booking.py
++++ b/app/services/booking.py
+@@ -38,10 +38,10 @@
+ def check_capacity(table_id: int, requested: int) -> bool:
+     """Kiểm tra bàn có đủ chỗ không."""
+     table = Table.query.get(table_id)
+     if table is None:
+         raise ValueError(f"Table {table_id} not found")
+-    return table.max_capacity >= requested
++    return table.max_capacity <= requested
+ 
+ def create_booking(table_id: int, customer_id: int, num_guests: int) -> Booking:
+     """Tạo booking mới."""
+     if not check_capacity(table_id, num_guests):

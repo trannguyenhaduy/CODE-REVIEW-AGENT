@@ -1,0 +1,86 @@
+[project]
+name = "code-review-agent"
+version = "0.1.0"
+description = "AI-powered Code Review Agent — SE373 Đồ án cuối kỳ"
+requires-python = ">=3.11"
+dependencies = [
+    # === LLM & Agent Framework ===
+    "langchain>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-anthropic>=0.2.0",
+    "langgraph>=0.2.0",
+    "langchain-community>=0.3.0",
+
+    # === Git & PR Parsing ===
+    "unidiff>=0.7.5",        # Parse git diff thành structured data — KHÔNG để LLM tự đếm dòng
+    "gitpython>=3.1.40",     # GitPython cho thao tác local git
+    "PyGithub>=2.1.1",       # GitHub API client
+
+    # === Pydantic (Structured Output) ===
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+
+    # === Vector Store & Embeddings (RAG - Phase 2) ===
+    "chromadb>=0.5.0",
+    "langchain-chroma>=0.1.0",
+
+    # === Static Analysis Tools (wrapped as tools) ===
+    # ruff, mypy, bandit, semgrep — cài qua pip riêng hoặc pre-installed
+
+    # === CLI & UI ===
+    "click>=8.1.7",
+    "rich>=13.7.0",           # Colorized terminal output cho UC1
+
+    # === State & Persistence ===
+    "langgraph-checkpoint-sqlite>=2.0.0",  # LangGraph checkpointer SQLite
+
+    # === Observability ===
+    "langsmith>=0.1.140",
+
+    # === HTTP & API ===
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+
+    # === Utilities ===
+    "tenacity>=8.2.3",        # Retry logic
+    "structlog>=24.1.0",      # Structured logging
+    "pyyaml>=6.0.1",          # YAML parsing cho truth.yaml
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+linters = [
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "bandit[toml]>=1.7.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "W", "I", "N", "UP", "B", "S"]
+ignore = ["S101"]  # allow assert in tests
+
+[tool.ruff.per-file-ignores]
+"tests/*" = ["S101", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["evals/tools", "tests"]
+addopts = "-v --tb=short"

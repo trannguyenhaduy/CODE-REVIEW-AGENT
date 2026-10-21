@@ -1,0 +1,103 @@
+# ============================================================
+# .gitignore — Code Review Agent · SE373
+# ⚠️  Vi phạm: commit .env bị trừ 1.0 điểm theo rubric
+# ============================================================
+
+# === SECRETS & ENV — NEVER COMMIT ===
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+*.p12
+*.pfx
+secrets/
+.secrets/
+
+# === PYTHON ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# === VIRTUAL ENVIRONMENTS ===
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# === TESTING & COVERAGE ===
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# === TYPE CHECKING ===
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyright/
+
+# === LINTING ===
+.ruff_cache/
+
+# === LANGGRAPH / LANGCHAIN ===
+.langgraph_cache/
+*.db
+*.sqlite
+*.sqlite3
+checkpoints/
+
+# === EVAL GROUND TRUTH — never in agent workspace ===
+# (truth.yaml files are read by eval scripts, not by agent)
+# evals/prs/*/truth.yaml is committed but excluded from agent's runtime context
+
+# === IDE ===
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# === LOGS & TRACES ===
+logs/
+*.log
+trace_*.jsonl
+langsmith_trace/
+
+# === VECTOR STORE INDEXES ===
+chroma_db/
+faiss_index/
+vectorstore/
+*.faiss
+*.pkl
+
+# === NODE (if any frontend) ===
+node_modules/
+.next/
+dist/
+
+# === MISC ===
+*.tmp
+*.bak
+.cache/
+
+# === AGENT ASSISTANT RULES & SKILLS (DO NOT COMMIT) ===
+AGENTS.md
+.agents/
+skills/
