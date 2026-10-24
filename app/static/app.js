@@ -247,7 +247,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // 3. Chỉ số đo lường hiệu năng
         metricLatency.textContent = `${Math.round(perf.total_latency_ms || 120)} ms`;
-        metricTokens.textContent = (perf.total_tokens || 0).toLocaleString();
+        const totalTokens = perf.total_tokens || (perf.token_usage && perf.token_usage.total) || 0;
+        metricTokens.textContent = totalTokens.toLocaleString();
         metricFindingsCount.textContent = `${findings.length} lỗi`;
 
         // 4. Danh sách Findings
@@ -277,15 +278,21 @@ document.addEventListener("DOMContentLoaded", () => {
                     `;
                 }
 
+                const filePath = f.file || f.file_path || "unknown";
+                const lineNum = f.line !== undefined ? f.line : (f.start_line !== undefined ? f.start_line : "-");
+                const endLineNum = f.end_line && f.end_line !== lineNum ? `-${f.end_line}` : "";
+                const category = f.category || f.rule_id || "logic";
+                const message = f.message || f.description || "";
+
                 card.innerHTML = `
                     <div class="finding-header">
                         <div class="finding-title-box">
                             <span class="severity-badge ${sev}">${f.severity || "MINOR"}</span>
-                            <span class="finding-location">📁 ${escapeHtml(f.file_path)} : L${f.start_line}${f.end_line && f.end_line !== f.start_line ? `-${f.end_line}` : ""}</span>
+                            <span class="finding-location">📁 ${escapeHtml(filePath)} : L${lineNum}${endLineNum}</span>
                         </div>
-                        <span class="finding-rule">${escapeHtml(f.rule_id || f.category || "CODE-QUALITY")}</span>
+                        <span class="finding-rule">${escapeHtml(category)}</span>
                     </div>
-                    <p class="finding-desc">${escapeHtml(f.description || "")}</p>
+                    <p class="finding-desc">${escapeHtml(message)}</p>
                     ${suggestionHtml}
                 `;
                 findingsList.appendChild(card);

@@ -114,10 +114,19 @@ def review_code():
             logger=logger,
         )
         summary = logger.get_summary()
+        summary["total_tokens"] = summary.get("token_usage", {}).get("total", 0)
         records = logger.read_records()
 
-        # Format findings list thành dict an toàn
-        findings_data = [f.model_dump() for f in report.findings]
+        # Format findings list thành dict an toàn với đầy đủ các alias cho Web UI
+        findings_data = []
+        for f in report.findings:
+            item = f.model_dump()
+            item["file_path"] = f.file
+            item["start_line"] = f.line
+            item["end_line"] = f.line
+            item["description"] = f.message
+            item["rule_id"] = f.category.value if hasattr(f.category, "value") else str(f.category)
+            findings_data.append(item)
 
         return jsonify({
             "status": "SUCCESS",
