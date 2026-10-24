@@ -28,7 +28,8 @@ from langchain_core.messages import AIMessage
 from agent import StepLogger, run_code_review
 from evals.benchmark import get_mock_response_for_case
 
-app = Flask(__name__, static_folder="static", template_folder="static")
+STATIC_DIR = PROJECT_ROOT / "app" / "static"
+app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 app.config["JSON_AS_ASCII"] = False
 
 DATASET_DIR = PROJECT_ROOT / "evals" / "dataset"
@@ -39,7 +40,16 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 @app.route("/")
 def index():
     """Phục vụ file HTML giao diện chính."""
-    return send_from_directory(app.static_folder, "index.html")
+    return send_from_directory(str(STATIC_DIR), "index.html")
+
+
+@app.route("/<path:filename>")
+def serve_static(filename):
+    """Phục vụ file tĩnh (CSS, JS, icons) trực tiếp từ thư mục static."""
+    target_file = STATIC_DIR / filename
+    if target_file.exists():
+        return send_from_directory(str(STATIC_DIR), filename)
+    return jsonify({"error": f"Không tìm thấy file: {filename}"}), 404
 
 
 @app.route("/api/diffs", methods=["GET"])
