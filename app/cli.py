@@ -80,20 +80,41 @@ def cli():
 
 
 @cli.command()
-@click.option("--diff", "-d", type=click.Path(exists=True), required=True, help="Đường dẫn file Git Diff (.diff hoặc .patch)")
-@click.option("--pr", "-p", default=42, type=int, help="Số hiệu Pull Request (mặc định: 42)")
-@click.option("--repo", "-r", default="uit/cafe-song-han", help="Tên repository (mặc định: uit/cafe-song-han)")
+@click.option("--diff", "-d", type=click.Path(exists=True), default=None, help="Đường dẫn file Git Diff (.diff hoặc .patch)")
+@click.option("--url", "-u", default=None, help="Đường dẫn GitHub Pull Request (vd: https://github.com/owner/repo/pull/1)")
+@click.option("--pr", "-p", default=None, type=int, help="Số hiệu Pull Request (mặc định: tự trích xuất từ URL hoặc 42)")
+@click.option("--repo", "-r", default=None, help="Tên repository (mặc định: tự trích xuất từ URL hoặc uit/cafe-song-han)")
 @click.option("--commit", "-c", default="HEAD", help="Mã commit SHA (mặc định: HEAD)")
 @click.option("--mock", "-m", is_flag=True, default=False, help="Chạy chế độ giả lập offline để demo nhanh không cần mở 9Router")
 @click.option("--out", "-o", type=click.Path(), default=None, help="Đường dẫn file JSON xuất kết quả báo cáo")
-def review(diff: str, pr: int, repo: str, commit: str, mock: bool, out: str | None):
-    """Tiến hành rà soát tự động một file Git Diff."""
+def review(diff: str | None, url: str | None, pr: int | None, repo: str | None, commit: str, mock: bool, out: str | None):
+    """Tiến hành rà soát tự động một file Git Diff hoặc một GitHub Pull Request."""
     render_banner()
 
-    diff_path = Path(diff)
-    diff_text = diff_path.read_text(encoding="utf-8")
+    if not diff and not url:
+        console.print("[bold red]❌ Lỗi:[/bold red] Vui lòng cung cấp file diff (`--diff`) hoặc đường dẫn GitHub PR (`--url`)!")
+        console.print("[dim yellow]Ví dụ: python app/cli.py review --url https://github.com/trannguyenhaduy/se373-demo-target/pull/1[/dim yellow]")
+        return
 
-    console.print(f"[bold yellow]📂 Đang tải Git Diff:[/bold yellow] [white]{diff_path.resolve()}[/white]")
+    diff_text = ""
+    if url:
+        from app.server import fetch_github_diff
+        console.print(f"[bold cyan]🔗 Đang kết nối GitHub và kéo Git Diff từ:[/bold cyan] [white]{url}[/white]")
+        try:
+            diff_text, fetched_repo, fetched_pr = fetch_github_diff(url)
+            repo = repo or fetched_repo
+            pr = pr or fetched_pr
+            console.print(f"[bold green]✅ Tải thành công:[/bold green] PR #{pr} ({len(diff_text.splitlines())} dòng diff)")
+        except Exception as e:
+            console.print(f"[bold red]❌ Không thể tải diff từ GitHub:[/bold red] {e}")
+            return
+    else:
+        diff_path = Path(diff)
+        diff_text = diff_path.read_text(encoding="utf-8")
+        console.print(f"[bold yellow]📂 Đang tải Git Diff:[/bold yellow] [white]{diff_path.resolve()}[/white]")
+        pr = pr or 42
+        repo = repo or "uit/cafe-song-han"
+
     console.print(f"[bold yellow]📌 Thông tin PR:[/bold yellow] #{pr} | Repo: [cyan]{repo}[/cyan] | Commit: [magenta]{commit}[/magenta]")
     if mock:
         console.print("[bold magenta]🧪 Chế độ: MOCK OFFLINE (Giả lập phản hồi LLM)[/bold magenta]\n")

@@ -28,6 +28,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const toggleMock = document.getElementById("toggle-mock");
     const modeDescText = document.getElementById("mode-desc-text");
     const btnRunReview = document.getElementById("btn-run-review");
+    const inputGithubUrl = document.getElementById("input-github-url");
+    const btnFetchGithub = document.getElementById("btn-fetch-github");
 
     // Output State Elements
     const emptyState = document.getElementById("empty-state");
@@ -155,6 +157,60 @@ document.addEventListener("DOMContentLoaded", () => {
             inputPr.value = Math.floor(Math.random() * 90) + 10;
         }
     });
+
+    // -------------------------------------------------------------------------
+    // 4.5. TỰ ĐỘNG KÉO DIFF TỪ GITHUB PULL REQUEST
+    // -------------------------------------------------------------------------
+    async function fetchFromGitHub() {
+        const url = (inputGithubUrl ? inputGithubUrl.value : "").trim();
+        if (!url) {
+            showToast("⚠️ Vui lòng dán link GitHub PR!");
+            if (inputGithubUrl) inputGithubUrl.focus();
+            return;
+        }
+
+        btnFetchGithub.disabled = true;
+        btnFetchGithub.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;margin:0"></span> Đang kéo...';
+
+        try {
+            const res = await fetch("/api/fetch-github-pr", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: url })
+            });
+
+            const data = await res.json();
+            if (!res.ok || data.status === "ERROR") {
+                throw new Error(data.error || "Không thể tải PR từ GitHub!");
+            }
+
+            diffEditor.value = data.diff_text;
+            inputRepo.value = data.repo;
+            inputPr.value = data.pr_number;
+            updateDiffLines();
+            selectPreset.value = "";
+
+            showToast(`✅ Đã kéo PR #${data.pr_number} (${data.lines_count} dòng) từ ${data.repo}!`);
+        } catch (err) {
+            console.error(err);
+            alert("Lỗi khi tải từ GitHub: " + err.message);
+        } finally {
+            btnFetchGithub.disabled = false;
+            btnFetchGithub.innerHTML = '<span class="btn-icon">⚡</span> Kéo Diff';
+        }
+    }
+
+    if (btnFetchGithub) {
+        btnFetchGithub.addEventListener("click", fetchFromGitHub);
+    }
+    if (inputGithubUrl) {
+        inputGithubUrl.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                fetchFromGitHub();
+            }
+        });
+    }
 
     // -------------------------------------------------------------------------
     // 5. KHỞI CHẠY CODE REVIEW

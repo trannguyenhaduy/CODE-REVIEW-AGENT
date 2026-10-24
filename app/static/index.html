@@ -49,9 +49,23 @@
                         <span class="panel-tag">Input Source</span>
                     </div>
 
+                    <!-- KHUNG TỰ ĐỘNG KÉO DIFF TỪ GITHUB PR -->
+                    <div class="github-fetch-box">
+                        <label for="input-github-url">🔗 Kéo Thẳng Pull Request Từ GitHub (Auto-Fetch):</label>
+                        <div class="github-input-row">
+                            <input type="text" id="input-github-url" class="text-input" placeholder="Dán link PR (vd: https://github.com/trannguyenhaduy/se373-demo-target/pull/1)...">
+                            <button id="btn-fetch-github" class="btn-fetch">
+                                <span class="btn-icon">⚡</span> Kéo Diff
+                            </button>
+                        </div>
+                        <p class="fetch-hint">Dán link PR ➔ Agent tự trích xuất Repo, số PR và kéo toàn bộ diff về review!</p>
+                    </div>
+
+                    <div class="or-divider"><span>HOẶC CHỌN KỊCH BẢN TEST MẪU (10 CASES)</span></div>
+
                     <!-- CHỌN KỊCH BẢN DIFF MẪU -->
                     <div class="form-group">
-                        <label for="select-preset">Chọn Kịch Bản Test Mẫu (10 Cases):</label>
+                        <label for="select-preset">Chọn Kịch Bản Test Mẫu:</label>
                         <select id="select-preset" class="select-input">
                             <option value="">-- Đang nạp danh sách 10 ca kiểm thử... --</option>
                         </select>

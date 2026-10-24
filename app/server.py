@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -27,6 +30,54 @@ from langchain_core.messages import AIMessage
 
 from agent import StepLogger, run_code_review
 from evals.benchmark import get_mock_response_for_case
+
+
+def fetch_github_diff(pr_url: str, token: str | None = None) -> tuple[str, str, int]:
+    """
+    Bóc tách URL GitHub Pull Request và tải trực tiếp nội dung git diff.
+    Hỗ trợ các định dạng:
+    - https://github.com/owner/repo/pull/123
+    - https://github.com/owner/repo/pull/123/files
+    - https://github.com/owner/repo/pull/123.diff
+    - owner/repo#123
+    """
+    pr_url = pr_url.strip()
+    m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", pr_url)
+    if not m:
+        m = re.search(r"^([^/]+)/([^#]+)#(\d+)$", pr_url)
+
+    if not m:
+        raise ValueError(
+            "Đường dẫn không hợp lệ! Vui lòng nhập link GitHub PR chuẩn, ví dụ:\n"
+            "https://github.com/trannguyenhaduy/se373-demo-target/pull/1"
+        )
+
+    owner = m.group(1)
+    repo_name = m.group(2)
+    pr_num = int(m.group(3))
+    repo_full = f"{owner}/{repo_name}"
+
+    diff_url = f"https://github.com/{owner}/{repo_name}/pull/{pr_num}.diff"
+    headers = {
+        "User-Agent": "CodeReviewAgent-SE373",
+        "Accept": "application/vnd.github.v3.diff",
+    }
+    github_token = token or os.getenv("GITHUB_TOKEN")
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    req = urllib.request.Request(diff_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read().decode("utf-8")
+            return content, repo_full, pr_num
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(f"Không tìm thấy PR #{pr_num} trên repository '{repo_full}'. Hãy kiểm tra lại link hoặc chắc chắn rằng PR đã được tạo!")
+        raise RuntimeError(f"Lỗi khi kết nối GitHub (HTTP {e.code}): {e.reason}")
+    except Exception as e:
+        raise RuntimeError(f"Lỗi mạng khi tải diff từ GitHub: {e}")
+
 
 STATIC_DIR = PROJECT_ROOT / "app" / "static"
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
@@ -76,19 +127,51 @@ def get_diffs():
     return jsonify({"diffs": diff_items})
 
 
+@app.route("/api/fetch-github-pr", methods=["POST"])
+def fetch_pr_route():
+    """Tự động kéo Git Diff trực tiếp từ một GitHub PR URL."""
+    data = request.get_json() or {}
+    pr_url = data.get("url", "").strip()
+    if not pr_url:
+        return jsonify({"error": "Vui lòng nhập đường dẫn URL GitHub PR!"}), 400
+
+    try:
+        diff_text, repo, pr_number = fetch_github_diff(pr_url)
+        lines_count = len(diff_text.splitlines()) if diff_text else 0
+        return jsonify({
+            "status": "SUCCESS",
+            "repo": repo,
+            "pr_number": pr_number,
+            "diff_text": diff_text,
+            "lines_count": lines_count,
+        })
+    except Exception as e:
+        return jsonify({"status": "ERROR", "error": str(e)}), 400
+
+
 @app.route("/api/review", methods=["POST"])
 def review_code():
     """API kích hoạt Agent rà soát mã nguồn."""
     data = request.get_json() or {}
     diff_text = data.get("diff_text", "").strip()
+    pr_url = data.get("pr_url", "").strip()
     pr_number = int(data.get("pr_number", 42))
     repo = data.get("repo", "uit/se373-project")
     commit_sha = data.get("commit_sha", "HEAD")
     mock = bool(data.get("mock", False))
     case_id = data.get("case_id", "")
 
+    # Tự động fetch diff nếu có pr_url và diff_text trống
+    if not diff_text and pr_url:
+        try:
+            diff_text, fetched_repo, fetched_pr = fetch_github_diff(pr_url)
+            repo = fetched_repo or repo
+            pr_number = fetched_pr or pr_number
+        except Exception as e:
+            return jsonify({"status": "ERROR", "error": str(e)}), 400
+
     if not diff_text:
-        return jsonify({"error": "Nội dung Git Diff không được để trống!"}), 400
+        return jsonify({"error": "Nội dung Git Diff không được để trống (hoặc nhập URL GitHub PR hợp lệ)!"}), 400
 
     logger = StepLogger(log_dir=str(LOGS_DIR))
     custom_llm = None
