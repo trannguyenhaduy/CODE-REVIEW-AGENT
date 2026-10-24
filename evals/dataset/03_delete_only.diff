@@ -1,0 +1,9 @@
+--- a/app/legacy/old_report.py
++++ b/app/legacy/old_report.py
+@@ -10,6 +9,0 @@
+-def generate_legacy_csv_report(data: list) -> str:
+-    """Hàm cũ không còn sử dụng kể từ phiên bản 2.0."""
+-    lines = []
+-    for row in data:
+-        lines.append(",".join(str(x) for x in row))
+-    return "\n".join(lines)

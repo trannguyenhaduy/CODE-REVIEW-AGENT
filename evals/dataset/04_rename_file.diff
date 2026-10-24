@@ -1,0 +1,12 @@
+diff --git a/app/models/user_account.py b/app/models/account.py
+similarity index 85%
+rename from app/models/user_account.py
+rename to app/models/account.py
+--- a/app/models/user_account.py
++++ b/app/models/account.py
+@@ -15,4 +15,4 @@
+ class Account:
+     def __init__(self, username: str, balance: float):
+         self.username = username
+-        self.balance = balance
++        self.balance = balance if balance >= 0 else 0.0

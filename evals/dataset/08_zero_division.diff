@@ -1,0 +1,7 @@
+--- a/app/analytics/metrics.py
++++ b/app/analytics/metrics.py
+@@ -18,3 +18,3 @@
+ def calculate_average_score(scores: list[float]) -> float:
+     """Tính điểm trung bình."""
+-    return sum(scores) / len(scores) if scores else 0.0
++    return sum(scores) / len(scores)

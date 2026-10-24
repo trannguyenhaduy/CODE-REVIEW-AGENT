@@ -1,0 +1,9 @@
+--- a/app/services/invoice_service.py
++++ b/app/services/invoice_service.py
+@@ -22,4 +22,6 @@
+ def get_user_invoices(user_ids: list[int]):
+     """Lấy hóa đơn của danh sách user."""
+     results = []
+     for uid in user_ids:
++        invoices = db.session.query(Invoice).filter_by(user_id=uid).all()
++        results.extend(invoices)

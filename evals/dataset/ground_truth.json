@@ -1,0 +1,138 @@
+{
+  "01_single_line_logic": {
+    "name": "PR có lỗi logic một dòng",
+    "diff_file": "evals/dataset/01_single_line_logic.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/services/booking.py",
+        "line": 43,
+        "line_range": [40, 46],
+        "severity": "major",
+        "category": "logic",
+        "description": "Toán tử bị đảo ngược từ >= sang <="
+      }
+    ]
+  },
+  "02_clean_pr": {
+    "name": "PR sạch không có lỗi",
+    "diff_file": "evals/dataset/02_clean_pr.diff",
+    "is_clean": true,
+    "expected_verdict": "approve",
+    "max_allowed_major": 2,
+    "expected_findings": []
+  },
+  "03_delete_only": {
+    "name": "PR chỉ xoá code (không có dòng +)",
+    "diff_file": "evals/dataset/03_delete_only.diff",
+    "is_clean": true,
+    "expected_verdict": "approve",
+    "max_allowed_major": 0,
+    "expected_findings": []
+  },
+  "04_rename_file": {
+    "name": "PR đổi tên file kèm sửa nội dung",
+    "diff_file": "evals/dataset/04_rename_file.diff",
+    "is_clean": true,
+    "expected_verdict": "approve",
+    "max_allowed_major": 1,
+    "expected_findings": []
+  },
+  "05_multi_file_call": {
+    "name": "PR gọi hàm sai thứ tự tham số",
+    "diff_file": "evals/dataset/05_multi_file_call.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/controllers/order_controller.py",
+        "line": 27,
+        "line_range": [25, 30],
+        "severity": "major",
+        "category": "logic",
+        "description": "Gọi hàm process_payment sai thứ tự tham số"
+      }
+    ]
+  },
+  "06_sql_injection": {
+    "name": "PR có lỗ hổng bảo mật SQL Injection",
+    "diff_file": "evals/dataset/06_sql_injection.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/repositories/user_repo.py",
+        "line": 14,
+        "line_range": [12, 16],
+        "severity": "critical",
+        "category": "security",
+        "description": "SQL Injection do nối chuỗi f-string trực tiếp vào câu lệnh SQL"
+      }
+    ]
+  },
+  "07_hardcoded_secret": {
+    "name": "PR để lộ Secret Token / API Key",
+    "diff_file": "evals/dataset/07_hardcoded_secret.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/config/payment.py",
+        "line": 6,
+        "line_range": [5, 8],
+        "severity": "critical",
+        "category": "security",
+        "description": "Hardcoded Stripe live secret key trong mã nguồn"
+      }
+    ]
+  },
+  "08_zero_division": {
+    "name": "PR có rủi ro chia cho 0 (ZeroDivisionError)",
+    "diff_file": "evals/dataset/08_zero_division.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/analytics/metrics.py",
+        "line": 20,
+        "line_range": [18, 22],
+        "severity": "major",
+        "category": "logic",
+        "description": "ZeroDivisionError khi mảng điểm scores rỗng"
+      }
+    ]
+  },
+  "09_infinite_loop": {
+    "name": "PR có vòng lặp vô tận (Infinite Loop)",
+    "diff_file": "evals/dataset/09_infinite_loop.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/sync/job_poller.py",
+        "line": 34,
+        "line_range": [32, 36],
+        "severity": "major",
+        "category": "logic",
+        "description": "Vòng lặp while True thiếu xử lý break/return khi hết việc"
+      }
+    ]
+  },
+  "10_n_plus_one_query": {
+    "name": "PR có vấn đề hiệu năng N+1 Database Query",
+    "diff_file": "evals/dataset/10_n_plus_one_query.diff",
+    "is_clean": false,
+    "expected_verdict": "request_changes",
+    "expected_findings": [
+      {
+        "file": "app/services/invoice_service.py",
+        "line": 26,
+        "line_range": [24, 28],
+        "severity": "major",
+        "category": "performance",
+        "description": "Truy vấn cơ sở dữ liệu lặp đi lặp lại bên trong vòng lặp for"
+      }
+    ]
+  }
+}

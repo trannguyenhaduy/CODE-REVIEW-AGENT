@@ -1,0 +1,12 @@
+--- a/app/utils/helpers.py
++++ b/app/utils/helpers.py
+@@ -10,2 +10,9 @@
+ def format_currency(amount: float) -> str:
+     """Định dạng số tiền sang chuẩn VND."""
++    if amount < 0:
++        raise ValueError("Số tiền không được âm")
++    return f"{amount:,.0f} VND"
++
++def sanitize_string(text: str) -> str:
++    """Xóa bỏ khoảng trắng thừa đầu cuối."""
++    return text.strip()

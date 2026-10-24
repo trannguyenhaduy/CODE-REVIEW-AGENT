@@ -1,271 +1,244 @@
 """
-app/cli.py — CLI Interface cho Code Review Agent (Phase 1)
-===========================================================
-Giao diện dòng lệnh cho UC-01: review PR từ local diff file hoặc stdin.
-
-Sử dụng:
-    python app/cli.py review --diff path/to/pr.diff --pr 42
-    python app/cli.py review --diff - --pr 42 < my.diff  (stdin)
-    python app/cli.py eval --demo
-    python app/cli.py info
+app/cli.py — Giao diện Dòng Lệnh Chuyên Nghiệp (Rich CLI Interface)
+=====================================================================
+Đáp ứng tiêu chuẩn Đồ án SE373 (Mảng 2.5 điểm Phần mềm):
+- Hiển thị Banner thương hiệu môn học và đề tài.
+- Trình diễn phán quyết PR rõ ràng (APPROVE, COMMENT, REQUEST_CHANGES).
+- Bảng hiển thị danh sách lỗi chi tiết kèm gợi ý sửa code 1-click chuẩn GitHub.
+- Bảng kiểm toán thời gian thực thi (Latency) và Token usage từ StepLogger.
+- Hỗ trợ cờ --mock cho chế độ chạy offline / demo khi chưa bật proxy.
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-# Fix Windows cp1252 UnicodeEncodeError (Lesson #1)
+# Đảm bảo in tiếng Việt trên console Windows
 if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
-# Add project root
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Đảm bảo Python nhận diện thư mục gốc của project
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    import click
-    from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich import print as rprint
-    RICH_AVAILABLE = True
-    console = Console(force_terminal=True, legacy_windows=False)
-except ImportError:
-    RICH_AVAILABLE = False
-    console = None
-    print("⚠️ Thiếu rich/click: pip install rich click")
+from unittest.mock import MagicMock
 
-from agent.tools.git_diff_reader import GitDiffReader
-from agent.harness.validator import FindingValidator
-from evals.dataset.eval_cases import EVAL_CASES, print_summary
+import click
+from langchain_core.messages import AIMessage
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+from agent import ReviewVerdict, Severity, StepLogger, run_code_review
+
+console = Console()
 
 
+def render_banner():
+    """In banner tiêu đề thương hiệu của Agent."""
+    banner_text = Text()
+    banner_text.append("🤖 CODE REVIEW AGENT · SE373 (UIT)\n", style="bold cyan")
+    banner_text.append("Autonomous Pull Request Reviewer with LangGraph & Verification Harness\n", style="italic white")
+    banner_text.append("Khoa Công nghệ Phần mềm — ĐH Công nghệ Thông tin (ĐHQG-HCM)", style="dim")
+
+    console.print(Panel(banner_text, border_style="cyan", padding=(1, 2)))
 
 
-def print_finding(finding: dict, index: int) -> None:
-    """In một finding với màu theo severity."""
-    severity_colors = {
-        "critical": "bold red",
-        "major": "red",
-        "minor": "yellow",
-        "nit": "dim",
+def get_mock_llm():
+    """Tạo Mock LLM cho chế độ demo / offline."""
+    mock_content = """```json
+{
+  "summary": "Phát hiện lỗi logic nghiêm trọng ở hàm check_capacity làm đảo ngược điều kiện so sánh. Cần sửa trước khi merge.",
+  "findings": [
+    {
+      "file": "app/services/booking.py",
+      "line": 43,
+      "side": "RIGHT",
+      "severity": "major",
+      "category": "logic",
+      "message": "Toán tử so sánh bị đảo ngược từ >= thành <= dẫn đến việc bàn quá tải khách so với sức chứa.",
+      "suggestion": "    return table.max_capacity >= requested",
+      "confidence": 0.98
     }
-    severity = finding.get("severity", "minor")
-    color = severity_colors.get(severity, "white")
-    
-    if console:
-        console.print(
-            f"\n[{color}]#{index + 1} [{severity.upper()}][/{color}] "
-            f"[bold]{finding.get('file', '?')}:{finding.get('line', '?')}[/bold] "
-            f"({finding.get('category', '?')})"
-        )
-        console.print(f"  {finding.get('message', '')}")
-        if finding.get("suggestion"):
-            console.print("  [dim]Suggestion:[/dim]")
-            console.print(f"  [green]{finding['suggestion'][:200]}[/green]")
-        if finding.get("confidence"):
-            console.print(f"  [dim]confidence: {finding['confidence']:.0%}[/dim]")
-    else:
-        print(f"\n#{index + 1} [{severity.upper()}] {finding.get('file')}:{finding.get('line')}")
-        print(f"  {finding.get('message')}")
+  ]
+}
+```"""
+    mock = MagicMock()
+    mock.invoke.return_value = AIMessage(content=mock_content)
+    mock.model_name = "mock-gemini-flash"
+    return mock
 
 
 @click.group()
 def cli():
-    """🤖 Code Review Agent — SE373 Đồ án cuối kỳ"""
+    """Hệ thống Đánh giá Mã Nguồn Tự Động (Code Review Agent)."""
     pass
 
 
 @cli.command()
-@click.option("--diff", "diff_path", required=True, 
-              help="Đường dẫn file diff (dùng '-' để đọc từ stdin)")
-@click.option("--pr", "pr_number", type=int, default=0, 
-              help="Số PR (dùng để sinh run_id)")
-@click.option("--repo", default="unknown/repo", 
-              help="Tên repo (owner/repo)")
-@click.option("--sha", "commit_sha", default="HEAD", 
-              help="Commit SHA")
-@click.option("--repo-root", default=".", 
-              help="Đường dẫn local repo (để đọc file context)")
-@click.option("--output", "output_path", default=None,
-              help="File JSON để lưu kết quả review")
-@click.option("--dry-run", is_flag=True, 
-              help="Chỉ parse diff, không gọi LLM")
-def review(diff_path, pr_number, repo, commit_sha, repo_root, output_path, dry_run):
-    """Review một PR từ file diff hoặc stdin."""
-    
-    # Đọc diff
-    if diff_path == "-":
-        diff_text = sys.stdin.read()
+@click.option("--diff", "-d", type=click.Path(exists=True), required=True, help="Đường dẫn file Git Diff (.diff hoặc .patch)")
+@click.option("--pr", "-p", default=42, type=int, help="Số hiệu Pull Request (mặc định: 42)")
+@click.option("--repo", "-r", default="uit/cafe-song-han", help="Tên repository (mặc định: uit/cafe-song-han)")
+@click.option("--commit", "-c", default="HEAD", help="Mã commit SHA (mặc định: HEAD)")
+@click.option("--mock", "-m", is_flag=True, default=False, help="Chạy chế độ giả lập offline để demo nhanh không cần mở 9Router")
+@click.option("--out", "-o", type=click.Path(), default=None, help="Đường dẫn file JSON xuất kết quả báo cáo")
+def review(diff: str, pr: int, repo: str, commit: str, mock: bool, out: str | None):
+    """Tiến hành rà soát tự động một file Git Diff."""
+    render_banner()
+
+    diff_path = Path(diff)
+    diff_text = diff_path.read_text(encoding="utf-8")
+
+    console.print(f"[bold yellow]📂 Đang tải Git Diff:[/bold yellow] [white]{diff_path.resolve()}[/white]")
+    console.print(f"[bold yellow]📌 Thông tin PR:[/bold yellow] #{pr} | Repo: [cyan]{repo}[/cyan] | Commit: [magenta]{commit}[/magenta]")
+    if mock:
+        console.print("[bold magenta]🧪 Chế độ: MOCK OFFLINE (Giả lập phản hồi LLM)[/bold magenta]\n")
     else:
-        path = Path(diff_path)
-        if not path.exists():
-            click.echo(f"❌ File không tồn tại: {diff_path}", err=True)
-            sys.exit(1)
-        diff_text = path.read_text(encoding="utf-8")
-    
-    if not diff_text.strip():
-        click.echo("❌ Diff rỗng", err=True)
-        sys.exit(1)
-    
-    # Parse diff để hiển thị info
-    reader = GitDiffReader()
-    parsed = reader.parse(diff_text)
-    summary = reader.get_summary(parsed)
-    
-    if console:
-        console.print(Panel(
-            f"[bold]PR:[/] #{pr_number}\n"
-            f"[bold]Repo:[/] {repo}\n"
-            f"[bold]SHA:[/] {commit_sha[:8]}\n"
-            f"[bold]Files changed:[/] {summary['total_files']}\n"
-            f"[bold]Lines added:[/] {summary['total_added_lines']} | "
-            f"[bold]Lines removed:[/] {summary['total_removed_lines']}",
-            title="🔍 Code Review Agent — Phase 1",
-            border_style="blue",
-        ))
-        
-        if summary["files"]:
-            t = Table(title="Changed Files")
-            t.add_column("File", style="cyan")
-            t.add_column("Status")
-            for f in parsed.files:
-                status = "🆕 NEW" if f.is_new_file else ("🗑️ DELETED" if f.is_deleted_file else "✏️ MODIFIED")
-                t.add_row(f.path, status)
-            console.print(t)
-    
-    if dry_run:
-        click.echo("\n✅ Dry run hoàn thành — bỏ qua LLM call")
-        return
-    
-    # Run agent
-    click.echo("\n🤖 Đang chạy agent review...")
-    
-    try:
-        from agent.graph import run_review
-        result = run_review(
-            pr_number=pr_number,
-            diff_text=diff_text,
-            repo=repo,
-            commit_sha=commit_sha,
-            repo_root=repo_root,
-            verbose=True,
-        )
-    except Exception as e:
-        click.echo(f"❌ Agent error: {e}", err=True)
-        # Fallback: parse-only mode
-        result = {
-            "verdict": "comment",
-            "findings": [],
-            "error": str(e),
-            "pr_number": pr_number,
-        }
-    
-    # Display results
-    findings = result.get("findings", [])
-    verdict = result.get("verdict", "comment")
-    
-    verdict_style = {
-        "approve": "✅ APPROVE",
-        "comment": "💬 COMMENT",
-        "request_changes": "🚫 REQUEST CHANGES",
-    }.get(verdict, verdict.upper())
-    
-    if console:
-        console.print(f"\n[bold]Verdict:[/] {verdict_style}")
-        console.print(f"[bold]Findings:[/] {len(findings)}")
-    
-    for i, finding in enumerate(findings):
-        print_finding(finding, i)
-    
-    if result.get("error"):
-        click.echo(f"\n⚠️ Errors: {result['error']}", err=True)
-    
-    # Save output
-    if output_path:
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        click.echo(f"\n💾 Kết quả lưu tại: {output_path}")
-    
-    click.echo(f"\n📝 Trace: {result.get('trace_path', 'N/A')}")
+        console.print("[bold green]🌐 Chế độ: LIVE LLM (Kết nối endpoint trong .env)[/bold green]\n")
 
+    logger = StepLogger(log_dir="logs")
+    custom_llm = get_mock_llm() if mock else None
 
-@cli.command()
-@click.option("--demo", is_flag=True, help="Chạy dry run với kết quả giả")
-@click.option("--input", "input_path", default=None, 
-              help="File JSON kết quả agent để chấm")
-def eval_score(demo, input_path):
-    """Chấm điểm eval — tính precision/recall/F1."""
-    
-    if demo:
-        from evals.scripts.score import dry_run_demo
-        dry_run_demo()
-    elif input_path:
-        from evals.scripts.score import score_batch, print_report
-        with open(input_path, encoding="utf-8") as f:
-            results = json.load(f)
-        batch = score_batch(results)
-        print_report(batch)
-    else:
-        print_summary()
-        click.echo("\nDùng --demo để chạy dry run")
-
-
-@cli.command()
-def info():
-    """Hiển thị thông tin dự án và trạng thái."""
-    if console:
-        console.print(Panel(
-            "[bold]SE373 — Đề tài 02: Code Review Agent[/]\n"
-            "[dim]Kỹ thuật xây dựng hệ thống Agentic AI — UIT[/]\n\n"
-            "[bold]Kiến trúc:[/] LangGraph ReAct + Pydantic v2 Structured Output\n"
-            "[bold]Model:[/] GPT-4o-mini (configurable via .env)\n"
-            "[bold]Tools:[/] GitDiffReader, FileContextReader, StaticAnalysis\n\n"
-            "[bold]Use Cases (Phase 1):[/]\n"
-            "  ✅ UC-01: Phân tích diff, comment inline, severity, suggestion\n"
-            "  ⏳ UC-02: RAG + quy ước nhóm (Phase 2)\n"
-            "  ⏳ UC-04: Multi-agent reviewer (Phase 3)\n",
-            title="🤖 Code Review Agent v0.1.0",
-            border_style="blue",
-        ))
-    else:
-        print("Code Review Agent v0.1.0 — SE373")
-    
-    # Check dependencies
-    deps = {
-        "langchain": False,
-        "langgraph": False,
-        "unidiff": False,
-        "pydantic": False,
-        "rich": False,
-        "dotenv": False,
-    }
-    
-    for dep in deps:
+    # Hiệu ứng Spinner chạy qua các trạm của LangGraph
+    with console.status("[bold green]Agent đang phân tích mã nguồn qua 4 trạm LangGraph...[/bold green]", spinner="dots"):
         try:
-            __import__(dep.replace("-", "_"))
-            deps[dep] = True
-        except ImportError:
-            pass
-    
-    if console:
-        t = Table(title="Dependencies")
-        t.add_column("Package")
-        t.add_column("Status")
-        for pkg, installed in deps.items():
-            status = "[green]✅ Installed[/]" if installed else "[red]❌ Missing[/]"
-            t.add_row(pkg, status)
-        console.print(t)
-    
-    missing = [k for k, v in deps.items() if not v]
-    if missing:
-        click.echo(f"\n⚠️ Cài thiếu: pip install {' '.join(missing)}")
+            report = run_code_review(
+                diff_text=diff_text,
+                pr_number=pr,
+                commit_sha=commit,
+                repo=repo,
+                custom_llm=custom_llm,
+                logger=logger,
+            )
+        except Exception as e:
+            console.print(f"\n[bold red]❌ Lỗi khi thực thi Review Agent:[/bold red] {e}")
+            if not mock:
+                console.print("[dim yellow]💡 Mẹo: Nếu 9Router chưa bật, bạn có thể thêm cờ --mock để chạy demo offline: 'python app/cli.py review --diff evals/dataset/sample.diff --mock'[/dim yellow]")
+            sys.exit(1)
+
+    # 1. Hiển thị Hộp Phán Quyết PR
+    console.print("\n" + "=" * 75)
+    console.print("⚖️  [bold]PHÁN QUYẾT CHO PULL REQUEST[/bold]")
+    console.print("=" * 75)
+
+    if report.verdict == ReviewVerdict.REQUEST_CHANGES:
+        verdict_panel = Panel(
+            f"[bold white on red] 🛑 REQUEST CHANGES — YÊU CẦU SỬA ĐỔI TRƯỚC KHI MERGE [/bold white on red]\n\n"
+            f"[bold]Tóm tắt:[/bold] {report.summary}",
+            title="[bold red]Phán Quyết[/bold red]",
+            border_style="red",
+            padding=(1, 2),
+        )
+    elif report.verdict == ReviewVerdict.APPROVE:
+        verdict_panel = Panel(
+            f"[bold white on green] ✅ APPROVE — CODE ĐẠT CHUẨN, CHO PHÉP MERGE [/bold white on green]\n\n"
+            f"[bold]Tóm tắt:[/bold] {report.summary}",
+            title="[bold green]Phán Quyết[/bold green]",
+            border_style="green",
+            padding=(1, 2),
+        )
     else:
-        click.echo("\n✅ Tất cả dependencies đã được cài")
+        verdict_panel = Panel(
+            f"[bold black on yellow] ⚠️  COMMENT — CÓ MỘT SỐ GÓP Ý THAM KHẢO [/bold black on yellow]\n\n"
+            f"[bold]Tóm tắt:[/bold] {report.summary}",
+            title="[bold yellow]Phán Quyết[/bold yellow]",
+            border_style="yellow",
+            padding=(1, 2),
+        )
+    console.print(verdict_panel)
+
+    # 2. Hiển thị Bảng Chi Tiết Findings
+    console.print("\n📋 [bold cyan]DANH SÁCH LỖI ĐÃ KIỂM ĐỊNH HỢP LỆ (INLINE FINDINGS):[/bold cyan]")
+    if not report.findings:
+        console.print("[green]✨ Không phát hiện lỗi nào! Mã nguồn hoàn toàn sạch đẹp.[/green]")
+    else:
+        table = Table(show_header=True, header_style="bold magenta", expand=True)
+        table.add_column("#", width=3, justify="center")
+        table.add_column("Vị Trí", style="cyan", width=26)
+        table.add_column("Mức Độ", justify="center", width=12)
+        table.add_column("Phân Loại", style="dim", width=12)
+        table.add_column("Chi Tiết Lỗi & Gợi Ý Sửa Code 1-Click", style="white")
+
+        severity_styles = {
+            Severity.CRITICAL: "[bold red]CRITICAL[/bold red]",
+            Severity.MAJOR: "[red]MAJOR[/red]",
+            Severity.MINOR: "[yellow]MINOR[/yellow]",
+            Severity.NIT: "[blue]NIT[/blue]",
+        }
+
+        for idx, f in enumerate(report.findings, 1):
+            sev_str = severity_styles.get(f.severity, str(f.severity))
+            pos_str = f"{f.file}:{f.line}"
+
+            detail_render = Text()
+            detail_render.append(f"{f.message}\n", style="white")
+            if f.suggestion:
+                detail_render.append("\n💡 Gợi ý sửa code (1-click suggestion):\n", style="bold green")
+                detail_render.append(f"{f.suggestion}\n", style="italic green")
+
+            table.add_row(str(idx), pos_str, sev_str, f.category.value, detail_render)
+
+        console.print(table)
+
+    # 3. Hiển thị Bảng Kiểm Toán Hiệu Năng (Step Logger Trace)
+    summary = logger.get_summary()
+    console.print("\n⏱️  [bold cyan]KIỂM TOÁN HIỆU NĂNG & DẤU VẾT HỘP ĐEN (STEP LOG):[/bold cyan]")
+
+    log_table = Table(show_header=True, header_style="bold blue", expand=True)
+    log_table.add_column("Bước (Node)", style="white")
+    log_table.add_column("Thời Gian (Latency)", justify="right", style="cyan")
+    log_table.add_column("Tokens Tiêu Thụ", justify="right", style="magenta")
+    log_table.add_column("Trạng Thái", justify="center")
+
+    for rec in logger.records:
+        status_styled = "[green]SUCCESS[/green]" if rec.status == "SUCCESS" else "[red]FAILED[/red]"
+        token_str = str(rec.token_usage.get("total", 0)) if rec.token_usage.get("total", 0) > 0 else "-"
+        log_table.add_row(
+            rec.step_name,
+            f"{rec.latency_ms:.1f} ms",
+            token_str,
+            status_styled,
+        )
+
+    console.print(log_table)
+    console.print(
+        f"[dim]• Tổng thời gian: [bold]{summary['total_latency_ms']} ms[/bold] | "
+        f"Tổng tokens: [bold]{summary['token_usage']['total']}[/bold] | "
+        f"File log: [italic]{logger.log_file.name}[/italic][/dim]\n"
+    )
+
+    # 4. Xuất file nếu người dùng yêu cầu
+    if out:
+        out_path = Path(out)
+        out_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        console.print(f"[bold green]💾 Đã lưu báo cáo JSON tại:[/bold green] [white]{out_path.resolve()}[/white]\n")
+
+
+@cli.command()
+def history():
+    """Xem danh sách các phiên chạy kiểm toán trong thư mục logs/."""
+    render_banner()
+    logs_dir = Path("logs")
+    if not logs_dir.exists() or not list(logs_dir.glob("*.jsonl")):
+        console.print("[yellow]Chưa có phiên chạy nào được ghi lại trong thư mục logs/.[/yellow]")
+        return
+
+    table = Table(title="Lịch Sử Các Phiên Chạy (Audit Trace Logs)", header_style="bold cyan")
+    table.add_column("Mã Phiên Chạy (Run ID)", style="white")
+    table.add_column("Số Bước", justify="right", style="green")
+    table.add_column("Dung Lượng Log", justify="right", style="magenta")
+    table.add_column("Đường Dẫn File", style="dim")
+
+    for file in sorted(logs_dir.glob("*.jsonl"), reverse=True)[:10]:
+        lines = [line for line in file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        size_kb = file.stat().st_size / 1024.0
+        table.add_row(file.stem, str(len(lines)), f"{size_kb:.1f} KB", str(file.name))
+
+    console.print(table)
 
 
 if __name__ == "__main__":

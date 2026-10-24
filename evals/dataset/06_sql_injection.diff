@@ -1,0 +1,9 @@
+--- a/app/repositories/user_repo.py
++++ b/app/repositories/user_repo.py
+@@ -12,4 +12,4 @@
+ def find_user_by_email(email: str) -> dict | None:
+     """Tìm kiếm user theo email."""
+-    query = "SELECT * FROM users WHERE email = :email"
+-    return db.execute(query, {"email": email}).fetchone()
++    query = f"SELECT * FROM users WHERE email = '{email}'"
++    return db.execute(query).fetchone()

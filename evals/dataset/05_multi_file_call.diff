@@ -1,0 +1,7 @@
+--- a/app/controllers/order_controller.py
++++ b/app/controllers/order_controller.py
+@@ -25,3 +25,3 @@
+ def place_order(order_id: int, total_amount: float, user_id: int):
+     """Xử lý đặt món và thanh toán: process_payment(user_id, amount)."""
+-    return process_payment(user_id=user_id, amount=total_amount)
++    return process_payment(total_amount, user_id)

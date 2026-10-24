@@ -10,18 +10,18 @@
 ## 1. Bảng Điều khiển Tiến độ Tổng quan
 
 <!-- PROGRESS_SUMMARY_START -->
-### 📊 Tổng quan Tiến độ Hiện tại: **28.2%**
+### 📊 Tổng quan Tiến độ Hiện tại: **35.9%**
 ```text
-[███████░░░░░░░░░░░░░░░░░░] 28.2% (11/39 công việc hoàn thành)
+[█████████░░░░░░░░░░░░░░░░] 35.9% (14/39 công việc hoàn thành)
 ```
 
 | Giai đoạn | Đã xong / Tổng số | Tiến độ | Trạng thái |
 | :--- | :---: | :---: | :--- |
 | **Giai đoạn 0: Khởi tạo & Nền tảng** | 4/4 | **100.0%** | ✅ Hoàn thành |
-| **Phase 1: Bootstrap dự án (Tuần 5–7)** | 7/12 | **58.3%** | 🔄 Đang thực hiện |
+| **Phase 1: Bootstrap dự án (Tuần 5–7)** | 10/12 | **83.3%** | 🔄 Đang thực hiện |
 | **Phase 2: Mở rộng năng lực (Tuần 8–9)** | 0/10 | **0.0%** | ⏳ Chờ thực hiện |
 | **Phase 3: Hoàn thiện & Nộp (Tuần 10–12)** | 0/13 | **0.0%** | ⏳ Chờ thực hiện |
-| **TỔNG CỘNG TOÀN DỰ ÁN** | **11/39** | **28.2%** | **🚀 ĐANG TRIỂN KHAI** |
+| **TỔNG CỘNG TOÀN DỰ ÁN** | **14/39** | **35.9%** | **🚀 ĐANG TRIỂN KHAI** |
 <!-- PROGRESS_SUMMARY_END -->
 
 ---
@@ -40,14 +40,14 @@
 *Mục tiêu: Dựng agent loop với ≥ 2 tools, 1 skill chuẩn, có step logging, UC1 chạy end-to-end, ≥ 10 eval cases.*
 - [x] Khởi tạo khung cấu trúc repo chuẩn, phân tách `agent/` (harness) và `app/` (giao diện/API).
 - [x] Cấu hình file `.gitignore` chặn commit file `.env` chứa API key (vi phạm bị trừ 1.0đ).
-- [ ] Thiết lập GitHub Actions CI cơ bản (kiểm tra linting và pytest).
+- [x] Thiết lập GitHub Actions CI cơ bản (kiểm tra linting và pytest).
 - [x] Lập trình Tool 1: `GitDiffReader` (parse git diff patch thành danh sách file và dòng thay đổi).
 - [x] Lập trình Tool 2: `FileContextReader` (đọc nội dung file xung quanh vùng diff).
 - [x] Cài đặt Agent ReAct Loop với Pydantic Structured Output cho `CodeIssue` & `ReviewVerdict`.
 - [x] Cài đặt Step Logging: Ghi vết chi tiết từng vòng (Step, Thought, Tool Call, Observation, Token, Latency).
 - [x] Xây dựng bộ ≥ 10 Eval Test Cases đầu tiên trong `eval/dataset/`.
-- [ ] Kết nối UC1 chạy end-to-end từ ứng dụng tới Agent (nhập PR diff $\rightarrow$ nhận inline suggestions).
-- [ ] Chạy benchmark Phase 1 đo lường độ chính xác và xuất báo cáo đối sánh.
+- [x] Kết nối UC1 chạy end-to-end từ ứng dụng tới Agent (nhập PR diff $\rightarrow$ nhận inline suggestions).
+- [x] Chạy benchmark Phase 1 đo lường độ chính xác và xuất báo cáo đối sánh.
 - [ ] Quay video demo ngắn (3–5 phút) chứng minh agent loop chạy thật và hiển thị log từng bước.
 - [ ] Gắn Git tag `phase-1-bootstrap` trên repository và nộp tiến độ tuần 7.
 

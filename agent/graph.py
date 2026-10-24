@@ -1,680 +1,442 @@
 """
-agent/graph.py — LangGraph ReAct Workflow cho Code Review Agent (UC-01)
-=======================================================================
-Kiến trúc LangGraph StateGraph với các node:
-
-    fetch_pr → guard → plan → review_loop → validate → verify → publish
-
-Mỗi node tương ứng với một lớp harness theo 12 lớp harness của môn học SE373.
+agent/graph.py — Bộ Não Điều Phối LangGraph (StateGraph Orchestrator)
+=====================================================================
+1. parse_node: Bóc tách git diff thô thành ParsedDiff (vị trí dòng có dấu +).
+2. guard_node: Cổng bảo vệ token (kiểm tra diff rỗng hoặc quá giới hạn MAX_DIFF_LINES).
+3. review_node: Gọi LLM (9Router / OpenAI API) để phân tích tìm bug/lỗi logic/bảo mật.
+4. validate_node: Cổng an ninh FindingValidator lọc ranh giới diff, chống spam và chốt phán quyết PR.
 """
 from __future__ import annotations
 
+import json
 import os
-import time
-from typing import Annotated, Optional, TypedDict
+import re
+from typing import Any, TypedDict
 
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, START, StateGraph
+
+from agent.harness.step_logger import StepLogger
+from agent.harness.validator import BatchValidationResult, FindingValidator
+from agent.schemas import ReviewFinding, ReviewReport, ReviewVerdict
+from agent.tools.git_diff_reader import GitDiffReader, ParsedDiff
+
 load_dotenv()
 
-# Tắt LangSmith tracing nếu chưa có key thật để tránh lỗi HTTP 403
-if not os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGCHAIN_API_KEY", "").startswith("ls__..."):
-    os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
-try:
-    from langchain_openai import ChatOpenAI
-except ImportError:
-    ChatOpenAI = None  # type: ignore
+# === SYSTEM PROMPTS & TEMPLATES ===
 
-try:
-    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
-    from langchain_core.tools import BaseTool
-    from langgraph.graph import StateGraph, END, START
-    from langgraph.prebuilt import ToolNode
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    LANGGRAPH_AVAILABLE = True
-except ImportError:
-    LANGGRAPH_AVAILABLE = False
+SYSTEM_PROMPT = """Bạn là Senior Code Reviewer chuyên nghiệp, sắc bén và cẩn trọng.
+Nhiệm vụ của bạn là rà soát các thay đổi mã nguồn trong Git Diff của Pull Request và phát hiện các lỗi:
+- Logic & Bugs (sai thuật toán, off-by-one, đảo ngược toán tử so sánh >= thành <=, rò rỉ tài nguyên)
+- Security (lộ secret, SQL injection, bypass quyền)
+- Performance (vòng lặp thừa, N+1 query)
+- Code Style & Maintainability
 
-from agent.schemas import ReviewFinding, ReviewReport, ReviewVerdict, Severity
-from agent.tools.git_diff_reader import GitDiffReader
-from agent.tools.file_context_reader import FileContextReader, create_file_context_tools
-from agent.harness.step_logger import StepLogger
-from agent.harness.validator import FindingValidator
+QUY TẮC CỐT LÕI (BẮT BUỘC TUÂN THỦ 100%):
+1. CHỈ NHẬN XÉT CÁC DÒNG CÓ DẤU '+' (Dòng được thêm mới hoặc sửa đổi trong Git Diff).
+2. Tuyệt đối KHÔNG bịa đặt số dòng hoặc tên file không có trong diff.
+3. Cung cấp khối gợi ý sửa code 1-click chuẩn GitHub (suggestion) cho các lỗi quan trọng.
+4. Phân loại mức độ nghiêm trọng chính xác:
+   - critical: Lỗ hổng bảo mật nghiêm trọng hoặc crash hệ thống tức thì.
+   - major: Lỗi logic sai nghiệp vụ (ví dụ: đảo ngược điều kiện).
+   - minor: Lỗi nhỏ, xử lý thiếu ngoại lệ hiếm gặp.
+   - nit: Góp ý format, đặt tên biến, comment.
 
-
-# ─────────────────────────────────────────────────────────────
-# Agent State (TypedDict cho LangGraph compatibility)
-# ─────────────────────────────────────────────────────────────
-
-class ReviewState(TypedDict, total=False):
-    """State của LangGraph workflow — được serialize vào SQLite checkpoint."""
-    # Input
-    pr_number: int
-    repo_full_name: str
-    commit_sha: str
-    diff_text: str
-    repo_root: str
-    
-    # Parsed diff
-    parsed_files: dict         # Output từ GitDiffReader
-    changed_file_paths: list[str]
-    
-    # Agent execution
-    messages: list             # LangChain messages (cho LLM)
-    tool_calls_count: int
-    
-    # Findings accumulation  
-    raw_findings: list[dict]   # Findings thô từ LLM (chưa validate)
-    validated_findings: list[dict]  # Findings đã pass validator
-    invalid_findings: list[dict]    # Findings bị reject
-    
-    # Verdict
-    verdict: str
-    review_summary: str
-    
-    # Tracking
-    current_node: str
-    step_count: int
-    error_log: list[str]
-    run_id: str
-    
-    # Phase 1: UC-01 specific
-    hunks_processed: list[str]  # Track hunk đã xử lý
-    guard_passed: bool
-
-
-# ─────────────────────────────────────────────────────────────
-# Prompts
-# ─────────────────────────────────────────────────────────────
-
-SYSTEM_PROMPT = """Bạn là một Code Review Agent chuyên nghiệp cho nhóm phát triển phần mềm.
-
-NHIỆM VỤ: Phân tích git diff của Pull Request và sinh danh sách findings có cấu trúc.
-
-QUY TẮC BẮT BUỘC:
-1. CHỈ comment vào các dòng THỰC SỰ CÓ trong diff (dòng mới thêm vào, có dấu '+')
-2. KHÔNG đoán hoặc bịa số dòng — kiểm tra kỹ số dòng ở phiên bản HEAD trong hunk
-3. Mỗi finding PHẢI có: file, line, severity, category, message, suggestion (nếu có), confidence
-4. KHÔNG comment vào dòng không thay đổi (nợ cũ), trừ khi nó trực tiếp gây ra lỗi ở dòng mới
-5. Severity: critical (security/crash) > major (logic/perf) > minor (missing edge case) > nit (style)
-6. Kết thúc bằng structured verdict: approve (nếu sạch) / request_changes (nếu có lỗi critical/major) / comment (nếu chỉ có nit/minor)
-
-BẮT BUỘC ĐỊNH DẠNG ĐẦU RA:
-Bạn PHẢI trả về câu trả lời có chứa một khối JSON chuẩn trong cặp ```json ... ``` như sau:
+ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC):
+Trả về DUY NHẤT một khối JSON hợp lệ theo cấu trúc sau (không kèm lời chào mở đầu hay kết thúc ngoài JSON):
 ```json
-{{
-  "summary": "Tóm tắt ngắn gọn kết quả review",
-  "verdict": "request_changes",
+{
+  "summary": "Tóm tắt ngắn gọn các phát hiện trong PR (1-3 câu)",
   "findings": [
-    {{
-      "file": "app/services/booking.py",
+    {
+      "file": "đường_dẫn_file",
       "line": 43,
-      "severity": "critical",
+      "side": "RIGHT",
+      "severity": "major",
       "category": "logic",
-      "message": "Giải thích rõ ràng: vấn đề là gì, tại sao sai (tối thiểu 10 ký tự)",
-      "suggestion": "    return table.max_capacity >= requested",
+      "message": "Mô tả chi tiết nguyên nhân và hậu quả của lỗi",
+      "suggestion": "dòng_code_sửa_lại_cho_đúng",
       "confidence": 0.95
-    }}
+    }
   ]
-}}
+}
 ```
-
-GIỚI HẠN:
-- Tối đa {max_tool_calls} lần gọi tool mỗi PR
-- Tối đa {max_findings} findings mỗi PR
-- Chỉ review file trong diff, không lan sang file khác không liên quan
-
-BỐI CẢNH DỰ ÁN:
-- Repo: Hệ thống đặt bàn "Cà phê Sông Hàn" (Python)
-- Ngôn ngữ: Python
-- Framework: FastAPI / SQLAlchemy
+Nếu PR hoàn toàn sạch sẽ và không có lỗi nào, trả về danh sách "findings": [] kèm lời khen trong "summary".
 """
 
-REVIEW_INSTRUCTION = """Hãy review PR sau:
+REVIEW_USER_PROMPT = """Vui lòng review Git Diff sau đây cho PR #{pr_number} thuộc repository '{repo}' (Commit {commit_sha}):
 
-PR #{pr_number}
-Repo: {repo}
-Commit: {commit_sha}
-
-DIFF:
-```
+```diff
 {diff_text}
 ```
 
-Hướng dẫn:
-1. Đọc kỹ git diff (chú ý hunk header @@ -a,b +c,d @@ và đếm đúng số dòng mới thêm vào)
-2. Phân tích lỗi logic, bảo mật, convention
-3. Trả về đúng định dạng JSON có chứa danh sách findings và verdict
-
-Bắt đầu phân tích:"""
+Hãy tập trung kiểm tra kỹ các dòng code có dấu '+' và trả về định dạng JSON theo đúng hướng dẫn.
+"""
 
 
-def _extract_findings_from_response(content: str) -> tuple[list[dict], str, str]:
-    """
-    Trích xuất findings, verdict, summary từ văn bản phản hồi của LLM.
-    Trả về: (findings_list, verdict, summary)
-    """
-    import json
-    import re
+# === STATE DEFINITION ===
 
-    findings: list[dict] = []
-    verdict = "comment"
-    summary = ""
+class ReviewState(TypedDict, total=False):
+    """Trạng thái trung tâm được truyền qua các Node trong LangGraph."""
+    pr_number: int
+    commit_sha: str
+    repo: str
+    diff_text: str
+    parsed_diff: ParsedDiff | None
+    raw_findings: list[dict]
+    raw_summary: str
+    validated_result: BatchValidationResult | None
+    report: ReviewReport | None
+    run_id: str
+    logger: StepLogger | None
+    errors: list[str]
 
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
-    data = None
+
+# === HELPER: BÓC TÁCH JSON TỪ PHẢN HỒI CỦA LLM ===
+
+def extract_json_from_response(text: str) -> dict[str, Any]:
+    """Trích xuất khối JSON từ output của LLM (hỗ trợ cả raw json lẫn markdown ```json)."""
+    text = text.strip()
+
+    # Tìm khối ```json ... ```
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
     if match:
-        try:
-            data = json.loads(match.group(1))
-        except Exception:
-            pass
-
-    if data is None:
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                data = json.loads(content[start:end + 1])
-            except Exception:
-                pass
-
-    if isinstance(data, dict):
-        summary = str(data.get("summary", ""))
-        verdict = str(data.get("verdict", "comment")).lower()
-        raw_list = data.get("findings", [])
-        if isinstance(raw_list, list):
-            for item in raw_list:
-                if not isinstance(item, dict):
-                    continue
-                file_path = str(item.get("file", "")).strip()
-                try:
-                    line_num = int(item.get("line", 0))
-                except (ValueError, TypeError):
-                    line_num = 0
-                msg = str(item.get("message", "")).strip()
-                if not file_path or line_num < 1 or len(msg) < 5:
-                    continue
-
-                sev = str(item.get("severity", "major")).lower()
-                if sev not in ("critical", "major", "minor", "nit"):
-                    sev = "major"
-
-                cat = str(item.get("category", "logic")).lower()
-                if cat not in ("logic", "security", "performance", "convention", "test", "other"):
-                    cat = "logic"
-
-                conf = item.get("confidence", 0.9)
-                try:
-                    conf = float(conf)
-                    conf = max(0.0, min(1.0, conf))
-                except (ValueError, TypeError):
-                    conf = 0.9
-
-                finding_dict = {
-                    "file": file_path,
-                    "line": line_num,
-                    "side": "RIGHT",
-                    "severity": sev,
-                    "category": cat,
-                    "message": msg,
-                    "suggestion": item.get("suggestion"),
-                    "confidence": conf,
-                    "rule_ref": item.get("rule_ref"),
-                    "tool_source": item.get("tool_source"),
-                }
-                findings.append(finding_dict)
-
-    return findings, verdict, summary
-
-
-# ─────────────────────────────────────────────────────────────
-# Node Functions
-# ─────────────────────────────────────────────────────────────
-
-def node_fetch_and_parse(state: ReviewState) -> dict:
-    """
-    Node 1: Parse git diff thành structured data.
-    Lớp harness: Tools + Context
-    """
-    diff_text = state.get("diff_text", "")
-    
-    if not diff_text.strip():
-        return {
-            "error_log": ["Diff rỗng — không có gì để review"],
-            "guard_passed": False,
-            "current_node": "fetch_parse",
-        }
-    
-    # Giới hạn kích thước diff (UC-05 sẽ xử lý PR lớn)
-    max_diff_lines = int(os.getenv("MAX_DIFF_LINES", "3000"))
-    diff_lines = diff_text.splitlines()
-    
-    if len(diff_lines) > max_diff_lines:
-        # Truncate và ghi cảnh báo
-        diff_text = "\n".join(diff_lines[:max_diff_lines])
-        warning = f"⚠️ Diff bị cắt: {len(diff_lines)} dòng → {max_diff_lines} dòng (UC-05 sẽ xử lý PR lớn)"
-        error_log = state.get("error_log", []) + [warning]
+        json_str = match.group(1).strip()
     else:
-        error_log = state.get("error_log", [])
-    
-    # Parse diff
-    reader = GitDiffReader()
-    parsed = reader.parse(diff_text)
-    summary = reader.get_summary(parsed)
-    
-    return {
-        "parsed_files": {
-            f.path: {
-                "added_lines": f.added_lines,
-                "removed_lines": f.removed_lines,
-                "all_valid_lines": list(f.all_valid_lines),
-                "is_new_file": f.is_new_file,
-                "is_deleted_file": f.is_deleted_file,
-            }
-            for f in parsed.files
-        },
-        "changed_file_paths": parsed.changed_file_paths,
-        "diff_text": diff_text,  # Updated (possibly truncated)
-        "error_log": error_log,
-        "current_node": "fetch_parse",
-        "guard_passed": True,
-        "hunks_processed": [],
-    }
-
-
-def node_guard(state: ReviewState) -> dict:
-    """
-    Node 2: Guard harness — kiểm tra an toàn trước khi review.
-    Lớp harness: Guardrails + Security
-    
-    Phát hiện:
-    - Diff quá lớn (DoS)
-    - Tên file nguy hiểm (prompt injection)
-    - PR rỗng
-    """
-    if not state.get("guard_passed", False):
-        return {"current_node": "guard", "guard_passed": False}
-    
-    changed_files = state.get("changed_file_paths", [])
-    errors = state.get("error_log", [])
-    
-    # Phát hiện tên file injection (UC Security Case 2)
-    suspicious_names = [
-        "ignore_previous_instructions",
-        "SYSTEM:",
-        "approve_all",
-    ]
-    for f in changed_files:
-        if any(s.lower() in f.lower() for s in suspicious_names):
-            errors.append(
-                f"🛡️ Guard: Phát hiện tên file nghi ngờ injection: {f}. "
-                f"Tiếp tục review bình thường, bỏ qua tên file."
-            )
-    
-    # Kiểm tra có file nào để review không
-    if not changed_files:
-        errors.append("Guard: Không có file nào để review")
-        return {
-            "guard_passed": False, 
-            "error_log": errors,
-            "current_node": "guard"
-        }
-    
-    return {
-        "guard_passed": True,
-        "error_log": errors,
-        "current_node": "guard",
-    }
-
-
-def node_review(state: ReviewState, llm, tools: list) -> dict:
-    """
-    Node 3: Core Review — LLM phân tích diff với ReAct pattern.
-    Lớp harness: Model + Context + Tools + Skills
-    """
-    if not state.get("guard_passed", False):
-        return {"current_node": "review", "verdict": "comment"}
-    
-    pr_number = state.get("pr_number", 0)
-    commit_sha = state.get("commit_sha", "unknown")[:8]
-    repo = state.get("repo_full_name", "unknown/repo")
-    diff_text = state.get("diff_text", "")
-    max_tool_calls = int(os.getenv("MAX_TOOL_CALLS_PER_PR", "30"))
-    max_findings = int(os.getenv("MAX_FINDINGS_PER_PR", "15"))
-    
-    # Build messages
-    system_msg = SystemMessage(content=SYSTEM_PROMPT.format(
-        max_tool_calls=max_tool_calls,
-        max_findings=max_findings,
-    ))
-    
-    human_msg = HumanMessage(content=REVIEW_INSTRUCTION.format(
-        pr_number=pr_number,
-        repo=repo,
-        commit_sha=commit_sha,
-        diff_text=diff_text[:8000],  # Giới hạn trong context
-    ))
-    
-    messages = [system_msg, human_msg]
-    
-    # LLM với tools binding (nếu có tools)
-    if tools:
-        llm_with_tools = llm.bind_tools(tools)
-    else:
-        llm_with_tools = llm
-    
-    raw_findings = state.get("raw_findings", [])
-    tool_calls_count = state.get("tool_calls_count", 0)
-    verdict = state.get("verdict", "comment")
-    summary = state.get("review_summary", "")
-    tool_map = {t.name: t for t in tools} if tools else {}
-    max_iterations = 5
+        json_str = text
 
     try:
-        for _ in range(max_iterations):
-            response = llm_with_tools.invoke(messages)
-            messages.append(response)
-            
-            tool_calls = getattr(response, "tool_calls", None)
-            if tool_calls and tool_calls_count < max_tool_calls:
-                for tc in tool_calls:
-                    t_name = tc.get("name")
-                    t_args = tc.get("args", {})
-                    t_id = tc.get("id", f"call_{tool_calls_count}")
-                    
-                    target_tool = tool_map.get(t_name)
-                    if target_tool:
-                        try:
-                            t_res = target_tool.invoke(t_args)
-                        except Exception as te:
-                            t_res = f"Tool execution error: {te}"
-                    else:
-                        t_res = f"Tool '{t_name}' not available"
-                        
-                    tool_msg = ToolMessage(content=str(t_res), tool_call_id=t_id, name=t_name)
-                    messages.append(tool_msg)
-                    tool_calls_count += 1
-                # Tiếp tục vòng lặp để LLM nhận quan sát từ tools
-                continue
-            
-            # Không có tool_calls nữa -> trích xuất kết quả review cuối cùng
-            resp_content = response.content if hasattr(response, "content") else str(response)
-            extracted_findings, parsed_verdict, parsed_summary = _extract_findings_from_response(resp_content)
-            
-            if extracted_findings:
-                raw_findings.extend(extracted_findings)
-            if parsed_verdict:
-                verdict = parsed_verdict
-            if parsed_summary:
-                summary = parsed_summary
-            break
-            
-    except Exception as e:
-        error_log = state.get("error_log", []) + [f"LLM error: {e}"]
-        return {
-            "current_node": "review",
-            "error_log": error_log,
-            "verdict": "comment",
-        }
-    
-    return {
-        "messages": messages,
-        "raw_findings": raw_findings,
-        "tool_calls_count": tool_calls_count,
-        "verdict": verdict,
-        "review_summary": summary,
-        "current_node": "review",
-    }
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        # Fallback: tìm cặp ngoặc nhọn đầu tiên và cuối cùng
+        start = json_str.find("{")
+        end = json_str.rfind("}")
+        if start != -1 and end != -1:
+            return json.loads(json_str[start : end + 1])
+        raise ValueError(f"Không thể parse JSON từ phản hồi LLM:\n{text[:300]}")
 
 
-def node_validate(state: ReviewState) -> dict:
-    """
-    Node 4: Validate findings trước khi publish.
-    Lớp harness: Verification + Guardrails
-    """
-    raw_findings_data = state.get("raw_findings", [])
+# === CÁC NODES TRONG LANGGRAPH ===
+
+if "your-key-here" in os.getenv("LANGCHAIN_API_KEY", ""):
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
+
+def parse_node(state: ReviewState) -> dict:
+    """Node 1: Bóc tách git diff thô thành ParsedDiff (tọa độ các dòng dấu +)."""
     diff_text = state.get("diff_text", "")
-    
-    # Rebuild ParsedDiff để validate
-    reader = GitDiffReader()
-    parsed = reader.parse(diff_text) if diff_text else None
-    
-    # Convert dict → ReviewFinding
-    raw_findings = []
-    for f in raw_findings_data:
-        try:
-            if isinstance(f, dict):
-                finding = ReviewFinding(**f)
-            else:
-                finding = f
-            raw_findings.append(finding)
-        except Exception as e:
-            error_log = state.get("error_log", [])
-            error_log.append(f"Schema validation error: {e}")
-    
-    # Run validator
-    validator = FindingValidator(parsed_diff=parsed)
-    result = validator.validate_batch(raw_findings)
-    
-    error_log = state.get("error_log", [])
-    if result.invalid:
-        for f, errors in result.invalid:
-            error_log.append(f"Invalid finding {f.file}:{f.line} — {'; '.join(errors)}")
-    
-    # Determine verdict
-    has_critical = any(
-        f.severity == Severity.CRITICAL for f in result.valid
-    )
-    has_major = any(
-        f.severity == Severity.MAJOR for f in result.valid
-    )
-    
-    if has_critical or has_major:
-        verdict = ReviewVerdict.REQUEST_CHANGES.value
-    elif result.valid:
-        verdict = ReviewVerdict.COMMENT.value
+    logger: StepLogger | None = state.get("logger")
+
+    if logger:
+        with logger.measure_step("parse_diff", input_data={"diff_length": len(diff_text)}) as ctx:
+            reader = GitDiffReader()
+            parsed = reader.parse(diff_text)
+            ctx.output_data = {
+                "files_count": len(parsed.files),
+                "changed_files": parsed.changed_file_paths,
+            }
     else:
-        verdict = ReviewVerdict.APPROVE.value
-    
+        parsed = GitDiffReader().parse(diff_text)
+
+    return {"parsed_diff": parsed}
+
+
+def guard_node(state: ReviewState) -> dict:
+    """Node 2: Cổng kiểm tra an toàn (Guardrail) — chặn diff rỗng hoặc quá giới hạn token."""
+    diff_text = state.get("diff_text", "").strip()
+    max_lines = int(os.getenv("MAX_DIFF_LINES", "3000"))
+    logger: StepLogger | None = state.get("logger")
+    errors: list[str] = list(state.get("errors", []))
+
+    if logger:
+        with logger.measure_step("guard_check", input_data={"max_allowed_lines": max_lines}) as ctx:
+            if not diff_text:
+                err_msg = "Git Diff rỗng, không có thay đổi nào để review!"
+                errors.append(err_msg)
+                ctx.status = "FAILED"
+                ctx.error = err_msg
+            else:
+                line_count = len(diff_text.splitlines())
+                if line_count > max_lines:
+                    err_msg = f"Git Diff vượt quá giới hạn an toàn ({line_count} > {max_lines} dòng)!"
+                    errors.append(err_msg)
+                    ctx.status = "FAILED"
+                    ctx.error = err_msg
+            ctx.output_data = {"guard_status": "PASSED" if not errors else "FAILED", "errors": errors}
+    else:
+        if not diff_text:
+            errors.append("Git Diff rỗng, không có thay đổi nào để review!")
+        elif len(diff_text.splitlines()) > max_lines:
+            errors.append("Git Diff vượt quá giới hạn an toàn!")
+
+    return {"errors": errors}
+
+
+def should_continue_to_review(state: ReviewState) -> str:
+    """Điều hướng có cho phép vào review_node hay nhảy thẳng sang validate_node."""
+    if state.get("errors"):
+        return "validate"
+    return "review"
+
+
+def review_node(state: ReviewState, custom_llm: Any = None) -> dict:
+    """
+    Node 3: Gọi AI LLM để rà soát mã nguồn và phát hiện lỗi.
+    - 100% finding hợp lệ theo schema.
+    - Output sai schema thì agent tự sửa tối đa 2 lần (Self-Correction Loop).
+    - Quá số lần thì bỏ finding đó và ghi lỗi vào trace log.
+    """
+    diff_text = state.get("diff_text", "")
+    pr_number = state.get("pr_number", 1)
+    repo = state.get("repo", "local/repo")
+    commit_sha = state.get("commit_sha", "HEAD")
+    logger: StepLogger | None = state.get("logger")
+
+    llm = custom_llm or ChatOpenAI(
+        model=os.getenv("LLM_MODEL", "ag/gemini-3.8-flash-high"),
+        base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:20128/v1"),
+        api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
+        temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
+    )
+
+    sys_msg = SystemMessage(content=SYSTEM_PROMPT)
+    user_msg = HumanMessage(
+        content=REVIEW_USER_PROMPT.format(
+            pr_number=pr_number,
+            repo=repo,
+            commit_sha=commit_sha,
+            diff_text=diff_text,
+        )
+    )
+
+    messages = [sys_msg, user_msg]
+    raw_findings: list[dict] = []
+    raw_summary = "Không tìm thấy lỗi đáng kể nào."
+    MAX_SCHEMA_RETRIES = 2
+    total_token_usage = {"prompt": 0, "completion": 0, "total": 0}
+
+    if logger:
+        with logger.measure_step("llm_review", input_data={"model": getattr(llm, "model_name", "llm")}) as ctx:
+            for attempt in range(MAX_SCHEMA_RETRIES + 1):
+                response = llm.invoke(messages)
+                usage = getattr(response, "usage_metadata", {}) or {}
+                total_token_usage["prompt"] += usage.get("input_tokens", 0)
+                total_token_usage["completion"] += usage.get("output_tokens", 0)
+                total_token_usage["total"] += usage.get("total_tokens", 0)
+
+                schema_errors: list[str] = []
+                valid_candidates: list[dict] = []
+
+                try:
+                    parsed_json = extract_json_from_response(response.content)
+                    raw_summary = parsed_json.get("summary", raw_summary)
+                    findings_candidates = parsed_json.get("findings", [])
+
+                    for idx, item in enumerate(findings_candidates):
+                        try:
+                            ReviewFinding(**item)
+                            valid_candidates.append(item)
+                        except Exception as e:
+                            schema_errors.append(f"Finding #{idx + 1} vi phạm ({e})")
+
+                    if not schema_errors:
+                        raw_findings = valid_candidates
+                        break
+
+                except Exception as e:
+                    schema_errors.append(f"Lỗi cú pháp JSON ({e})")
+
+                # Nếu sai schema và chưa quá 2 lần -> Tự động sửa lại
+                if attempt < MAX_SCHEMA_RETRIES:
+                    err_details = "; ".join(schema_errors)
+                    logger.log_step(
+                        step_name="self_correction_attempt",
+                        latency_ms=0.0,
+                        status="SUCCESS",
+                        input_data={"attempt": attempt + 1, "errors": err_details},
+                        output_data={"action": "Gửi yêu cầu LLM tự sửa schema"},
+                    )
+                    messages.append(response)
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                f"Output vừa rồi của bạn vi phạm schema sau:\n{err_details}\n\n"
+                                f"Hãy tự sửa lại lỗi (đây là lần tự sửa #{attempt + 1}/{MAX_SCHEMA_RETRIES}) "
+                                f"và trả về DUY NHẤT một khối JSON hợp lệ theo đúng schema!"
+                            )
+                        )
+                    )
+                else:
+                    # Quá 2 lần: bỏ các finding vi phạm và ghi lỗi vào trace
+                    logger.log_step(
+                        step_name="self_correction_exhausted",
+                        latency_ms=0.0,
+                        status="FAILED",
+                        error=f"Đã quá {MAX_SCHEMA_RETRIES} lần tự sửa. Bỏ qua các finding lỗi: {'; '.join(schema_errors)}",
+                        input_data={"attempt": attempt + 1},
+                        output_data={"retained_findings": len(valid_candidates)},
+                    )
+                    raw_findings = valid_candidates
+
+            ctx.token_usage = total_token_usage
+            ctx.output_data = {
+                "raw_findings_count": len(raw_findings),
+                "summary_preview": raw_summary[:100],
+            }
+    else:
+        for attempt in range(MAX_SCHEMA_RETRIES + 1):
+            response = llm.invoke(messages)
+            schema_errors = []
+            valid_candidates = []
+            try:
+                parsed_json = extract_json_from_response(response.content)
+                raw_summary = parsed_json.get("summary", raw_summary)
+                findings_candidates = parsed_json.get("findings", [])
+                for idx, item in enumerate(findings_candidates):
+                    try:
+                        ReviewFinding(**item)
+                        valid_candidates.append(item)
+                    except Exception as e:
+                        schema_errors.append(f"Finding #{idx + 1}: {e}")
+
+                if not schema_errors:
+                    raw_findings = valid_candidates
+                    break
+            except Exception as e:
+                schema_errors.append(f"JSON error: {e}")
+
+            if attempt < MAX_SCHEMA_RETRIES:
+                messages.append(response)
+                messages.append(
+                    HumanMessage(
+                        content=f"Output vi phạm schema: {'; '.join(schema_errors)}. Vui lòng tự sửa lại theo schema!"
+                    )
+                )
+            else:
+                raw_findings = valid_candidates
+
+    return {"raw_findings": raw_findings, "raw_summary": raw_summary}
+
+
+def validate_node(state: ReviewState) -> dict:
+    """Node 4: Cổng kiểm định an toàn (FindingValidator) và đóng gói ReviewReport."""
+    parsed_diff = state.get("parsed_diff")
+    raw_findings_data = state.get("raw_findings", [])
+    raw_summary = state.get("raw_summary", "")
+    errors = state.get("errors", [])
+    logger: StepLogger | None = state.get("logger")
+
+    validator = FindingValidator(parsed_diff=parsed_diff)
+
+    # Chuyển dict thô từ LLM thành các đối tượng ReviewFinding chuẩn Pydantic
+    findings_objects: list[ReviewFinding] = []
+    for item in raw_findings_data:
+        try:
+            findings_objects.append(ReviewFinding(**item))
+        except Exception:
+            # Bỏ qua finding bị hỏng schema
+            continue
+
+    if logger:
+        with logger.measure_step("validate_and_verdict", input_data={"input_findings": len(findings_objects)}) as ctx:
+            validated_batch = validator.validate_batch(findings_objects)
+            verdict = validator.determine_verdict(validated_batch.valid)
+
+            if errors:
+                verdict = ReviewVerdict.COMMENT
+                final_summary = f"Review bị gián đoạn do lỗi: {'; '.join(errors)}"
+            else:
+                final_summary = raw_summary or f"Review hoàn tất. Phát hiện {len(validated_batch.valid)} lỗi cần lưu ý."
+
+            report = ReviewReport(
+                pr_number=state.get("pr_number", 1),
+                commit_sha=state.get("commit_sha", "HEAD"),
+                verdict=verdict,
+                summary=final_summary,
+                findings=validated_batch.valid,
+                run_id=state.get("run_id", "local_run"),
+            )
+
+            ctx.output_data = {
+                "valid_count": len(validated_batch.valid),
+                "pr_level_count": len(validated_batch.pr_level_comments),
+                "invalid_count": len(validated_batch.invalid),
+                "verdict": verdict.value,
+            }
+    else:
+        validated_batch = validator.validate_batch(findings_objects)
+        verdict = validator.determine_verdict(validated_batch.valid)
+        final_summary = raw_summary or f"Review hoàn tất. Phát hiện {len(validated_batch.valid)} lỗi."
+        report = ReviewReport(
+            pr_number=state.get("pr_number", 1),
+            commit_sha=state.get("commit_sha", "HEAD"),
+            verdict=verdict,
+            summary=final_summary,
+            findings=validated_batch.valid,
+            run_id=state.get("run_id", "local_run"),
+        )
+
     return {
-        "validated_findings": [f.model_dump() for f in result.valid],
-        "invalid_findings": [
-            {"finding": f.model_dump(), "errors": errs} 
-            for f, errs in result.invalid
-        ],
-        "verdict": verdict,
-        "error_log": error_log,
-        "current_node": "validate",
+        "validated_result": validated_batch,
+        "report": report,
     }
 
 
-# ─────────────────────────────────────────────────────────────
-# Graph Builder
-# ─────────────────────────────────────────────────────────────
+# === KHỞI TẠO STATEGRAPH ===
 
-def build_review_graph(repo_root: str = ".", checkpoint_db: str = "./checkpoints/agent.db"):
-    """
-    Xây dựng LangGraph StateGraph cho Code Review Agent.
-    
-    Args:
-        repo_root: Đường dẫn đến repo được review
-        checkpoint_db: Đường dẫn SQLite cho checkpoint (resume capability)
-    
-    Returns:
-        Compiled LangGraph app
-    """
-    if not LANGGRAPH_AVAILABLE:
-        raise ImportError("Cần cài langgraph: pip install langgraph")
-    
-    # Setup LLM
-    model_name = os.getenv("LLM_MODEL", "gpt-4o-mini")
-    if ChatOpenAI is None:
-        raise ImportError("Cần cài langchain-openai: pip install langchain-openai")
-    
-    base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-    api_key = os.getenv("OPENAI_API_KEY", "not-needed")
-    
-    llm_kwargs = {
-        "model": model_name,
-        "temperature": 0.0,  # Deterministic output
-        "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "4096")),
-        "api_key": api_key,
-    }
-    if base_url:
-        llm_kwargs["base_url"] = base_url
-        
-    llm = ChatOpenAI(**llm_kwargs)
-    
-    # Setup tools
-    tools = create_file_context_tools(repo_root=repo_root)
-    
-    # Build graph
+def create_review_graph(custom_llm: Any = None) -> Any:
+    """Xây dựng và biên dịch LangGraph StateGraph hoàn chỉnh."""
     workflow = StateGraph(ReviewState)
-    
-    # Add nodes
-    workflow.add_node("fetch_parse", node_fetch_and_parse)
-    workflow.add_node("guard", node_guard)
-    workflow.add_node("review", lambda state: node_review(state, llm, tools))
-    workflow.add_node("validate", node_validate)
-    
-    if tools:
-        workflow.add_node("tools", ToolNode(tools))
-    
-    # Add edges (flow)
-    workflow.add_edge(START, "fetch_parse")
-    workflow.add_edge("fetch_parse", "guard")
-    
-    # Conditional edge: guard passed → review, else END
+
+    # Đăng ký các Nodes
+    workflow.add_node("parse", parse_node)
+    workflow.add_node("guard", guard_node)
+    workflow.add_node("review", lambda state: review_node(state, custom_llm=custom_llm))
+    workflow.add_node("validate", validate_node)
+
+    # Đấu nối các Edges
+    workflow.add_edge(START, "parse")
+    workflow.add_edge("parse", "guard")
     workflow.add_conditional_edges(
         "guard",
-        lambda state: "review" if state.get("guard_passed", False) else END,
-        {"review": "review", END: END}
+        should_continue_to_review,
+        {
+            "review": "review",
+            "validate": "validate",
+        },
     )
-    
     workflow.add_edge("review", "validate")
     workflow.add_edge("validate", END)
-    
-    # Setup SQLite checkpointer
-    import os as _os
-    _os.makedirs(_os.path.dirname(checkpoint_db) if _os.path.dirname(checkpoint_db) else ".", exist_ok=True)
-    
-    try:
-        checkpointer = SqliteSaver.from_conn_string(checkpoint_db)
-        compiled = workflow.compile(checkpointer=checkpointer)
-    except Exception:
-        # Fallback: compile without checkpointer
-        compiled = workflow.compile()
-    
-    return compiled
+
+    return workflow.compile()
 
 
-# ─────────────────────────────────────────────────────────────
-# Main Entry Point
-# ─────────────────────────────────────────────────────────────
-
-def run_review(
-    pr_number: int,
+def run_code_review(
     diff_text: str,
-    repo: str = "unknown/repo",
+    pr_number: int = 1,
     commit_sha: str = "HEAD",
-    repo_root: str = ".",
-    verbose: bool = True,
-) -> dict:
+    repo: str = "local/repo",
+    custom_llm: Any = None,
+    logger: StepLogger | None = None,
+) -> ReviewReport:
     """
-    Chạy review cho một PR.
-    
-    Args:
-        pr_number: Số PR
-        diff_text: Raw git diff text
-        repo: "owner/repo"
-        commit_sha: SHA của commit
-        repo_root: Đường dẫn local repo
-        verbose: In log ra console
-    
-    Returns:
-        ReviewReport dict
+    Hàm entry point tiện lợi chạy toàn bộ quy trình review và trả về ReviewReport.
     """
-    # Setup logger
-    logger = StepLogger(
-        pr_number=pr_number,
-        commit_sha=commit_sha,
-        repo=repo,
-        log_dir="./logs",
-        console_output=verbose,
-    )
-    
-    logger.log_step(
-        thought=f"Bắt đầu review PR #{pr_number} @ {commit_sha[:8]}",
-        is_final=False,
-    )
-    
-    # Initial state
+    app = create_review_graph(custom_llm=custom_llm)
+    run_id = logger.run_id if logger else "run_standalone"
+
     initial_state: ReviewState = {
         "pr_number": pr_number,
-        "repo_full_name": repo,
         "commit_sha": commit_sha,
+        "repo": repo,
         "diff_text": diff_text,
-        "repo_root": repo_root,
-        "messages": [],
-        "tool_calls_count": 0,
-        "raw_findings": [],
-        "validated_findings": [],
-        "invalid_findings": [],
-        "verdict": "comment",
-        "review_summary": "",
-        "current_node": "init",
-        "step_count": 0,
-        "error_log": [],
-        "run_id": logger.run_id,
-        "hunks_processed": [],
-        "guard_passed": False,
-        "changed_file_paths": [],
-        "parsed_files": {},
+        "run_id": run_id,
+        "logger": logger,
+        "errors": [],
     }
-    
-    try:
-        graph = build_review_graph(repo_root=repo_root)
-        config = {"configurable": {"thread_id": logger.run_id}}
-        
-        start = time.monotonic()
-        final_state = graph.invoke(initial_state, config=config)
-        latency_ms = (time.monotonic() - start) * 1000
-        
-        validated = final_state.get("validated_findings", [])
-        verdict = final_state.get("verdict", "comment")
-        
-        logger.log_step(
-            thought="Review hoàn thành, validate findings",
-            observation=f"Verdict: {verdict} | Findings: {len(validated)}",
-            latency_ms=latency_ms,
-            is_final=True,
-        )
-        
-        summary = logger.finalize(verdict=verdict, findings=validated)
-        
-        return {
-            "run_id": logger.run_id,
-            "pr_number": pr_number,
-            "commit_sha": commit_sha,
-            "verdict": verdict,
-            "findings": validated,
-            "error_log": final_state.get("error_log", []),
-            "trace_path": logger.trace_path,
-            "stats": {
-                "total_steps": summary.total_steps,
-                "total_tool_calls": summary.total_tool_calls,
-                "total_tokens": summary.total_tokens,
-                "total_cost_usd": summary.total_cost_usd,
-                "latency_ms": latency_ms,
-            }
-        }
-    
-    except Exception as e:
-        logger.log_step(error=str(e), is_final=True)
-        logger.finalize(verdict="comment")
-        return {
-            "run_id": logger.run_id,
-            "error": str(e),
-            "verdict": "comment",
-            "findings": [],
-        }
+
+    final_state = app.invoke(initial_state)
+    return final_state["report"]

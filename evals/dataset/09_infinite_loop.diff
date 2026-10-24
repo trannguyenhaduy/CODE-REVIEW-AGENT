@@ -1,0 +1,8 @@
+--- a/app/sync/job_poller.py
++++ b/app/sync/job_poller.py
+@@ -30,4 +30,5 @@
+ def poll_pending_jobs():
+     """Lặp lấy danh sách công việc cần xử lý."""
+     while True:
+         job = queue.pop()
++        process_job(job)
