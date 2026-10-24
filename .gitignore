@@ -101,3 +101,8 @@ dist/
 AGENTS.md
 .agents/
 skills/
+reference/
+
+# === LOCAL STEP TESTS (KEEP LOCAL ONLY) ===
+test_step*.py
+

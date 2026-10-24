@@ -241,5 +241,18 @@ def history():
     console.print(table)
 
 
+@cli.command()
+@click.option("--port", "-p", default=5000, type=int, help="Cổng mạng của Web Dashboard (mặc định: 5000)")
+@click.option("--no-browser", is_flag=True, default=False, help="Không tự động mở trình duyệt sau khi khởi động")
+def web(port: int, no_browser: bool):
+    """Khởi động Giao Diện Web Dashboard Trực Quan (Flask + Modern Glassmorphic UI)."""
+    render_banner()
+    from app.server import start_server
+    console.print(f"[bold green]🌐 Đang mở Web Dashboard tại:[/bold green] [cyan]http://127.0.0.1:{port}[/cyan]")
+    console.print("[dim]Nhấn Ctrl+C để dừng máy chủ web.[/dim]\n")
+    start_server(port=port, open_browser=not no_browser)
+
+
 if __name__ == "__main__":
     cli()
+

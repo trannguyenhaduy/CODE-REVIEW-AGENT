@@ -10,18 +10,18 @@
 ## 1. Bảng Điều khiển Tiến độ Tổng quan
 
 <!-- PROGRESS_SUMMARY_START -->
-### 📊 Tổng quan Tiến độ Hiện tại: **35.9%**
+### 📊 Tổng quan Tiến độ Hiện tại: **46.2%**
 ```text
-[█████████░░░░░░░░░░░░░░░░] 35.9% (14/39 công việc hoàn thành)
+[████████████░░░░░░░░░░░░░] 46.2% (18/39 công việc hoàn thành)
 ```
 
 | Giai đoạn | Đã xong / Tổng số | Tiến độ | Trạng thái |
 | :--- | :---: | :---: | :--- |
 | **Giai đoạn 0: Khởi tạo & Nền tảng** | 4/4 | **100.0%** | ✅ Hoàn thành |
 | **Phase 1: Bootstrap dự án (Tuần 5–7)** | 10/12 | **83.3%** | 🔄 Đang thực hiện |
-| **Phase 2: Mở rộng năng lực (Tuần 8–9)** | 0/10 | **0.0%** | ⏳ Chờ thực hiện |
-| **Phase 3: Hoàn thiện & Nộp (Tuần 10–12)** | 0/13 | **0.0%** | ⏳ Chờ thực hiện |
-| **TỔNG CỘNG TOÀN DỰ ÁN** | **14/39** | **35.9%** | **🚀 ĐANG TRIỂN KHAI** |
+| **Phase 2: Mở rộng năng lực (Tuần 8–9)** | 2/10 | **20.0%** | ⏳ Chờ thực hiện |
+| **Phase 3: Hoàn thiện & Nộp (Tuần 10–12)** | 2/13 | **15.4%** | ⏳ Chờ thực hiện |
+| **TỔNG CỘNG TOÀN DỰ ÁN** | **18/39** | **46.2%** | **🚀 ĐANG TRIỂN KHAI** |
 <!-- PROGRESS_SUMMARY_END -->
 
 ---
@@ -61,8 +61,8 @@
 - [ ] Cấu hình LangGraph StateGraph quản lý State tác vụ và lưu Checkpoint vào SQLite.
 - [ ] Hỗ trợ tính năng dừng và tiếp tục (Resume) khi PR có push commit mới mà không review lại từ đầu.
 - [ ] Xây dựng điểm dừng Human-in-the-Loop (HITL - UC7): Cho phép developer xem, chỉnh sửa hoặc bỏ qua comment trước khi post lên GitHub.
-- [ ] Xây dựng backend Web API (`app/server.py` bằng FastAPI) với endpoints `/api/review`, `/api/approval` phục vụ HITL.
-- [ ] Xây dựng prototype giao diện Web duyệt finding (Approve / Reject / Edit inline suggestion) cho UC-07.
+- [x] Xây dựng backend Web API (`app/server.py` bằng Flask) với endpoints `/api/review`, `/api/diffs`, `/api/history`, `/api/benchmark`.
+- [x] Xây dựng prototype giao diện Web duyệt finding (Approve / Request Changes / Comment kèm 1-click inline suggestion).
 - [ ] Đảm bảo ≥ 3 use cases chạy hoàn hảo từ app tới agent.
 - [ ] Quay video demo Phase 2, gắn Git tag `phase-2-expansion` và nộp tiến độ tuần 9.
 
@@ -77,8 +77,8 @@
 - [ ] Phân quyền an toàn: Thiết lập chế độ Read-only mặc định, chặn hành vi ghi đè branch/repo.
 - [ ] Gắn kết hệ thống Observability & Tracing (LangSmith / OpenTelemetry) xem toàn bộ trace đồ thị.
 - [ ] Mở rộng bộ Golden Eval Dataset lên 15–20 cases và chạy benchmark đối sánh độ cải thiện qua 3 Phase.
-- [ ] Hoàn thiện Web Dashboard (`app/server.py` + `app/static/` Dark Theme): Đạt 2.5đ phần mềm với 3 tab: PR Review Live, HITL Approval Gate, Trace Graph & Benchmark Dashboard.
-- [ ] Tối ưu hóa CLI Runner (`app/cli.py`) phục vụ chạy batch eval và tích hợp GitHub Actions CI.
+- [x] Hoàn thiện Web Dashboard (`app/server.py` + `app/static/` Dark Theme): Đạt 2.5đ phần mềm với 3 tab: PR Review Studio, Hộp đen Audit Log, Benchmark Dashboard 10 Cases.
+- [x] Tối ưu hóa CLI Runner (`app/cli.py`) phục vụ chạy batch eval, review diff và tích hợp lệnh `web`.
 - [ ] Đảm bảo hoàn thành ≥ 5 use cases chạy hoàn hảo phủ trọn vẹn 8 mảng kiến thức K1–K8.
 - [ ] Viết Báo cáo đồ án chi tiết (PDF) kèm các bảng minh chứng kiến trúc và kết quả đo lường.
 - [ ] Quay Video demo chung cuộc chất lượng cao và chuẩn bị slide thuyết trình.

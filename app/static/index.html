@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Code Review Agent · SE373 Đồ Án Cuối Kỳ</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- HEADER THANH ĐIỀU HƯỚNG -->
+    <header class="app-header">
+        <div class="header-left">
+            <div class="logo-box">
+                <span class="logo-icon">🤖</span>
+                <span class="pulse-dot"></span>
+            </div>
+            <div class="header-title">
+                <h1>Code Review Agent <span class="badge-phase">Phase 1 · UC-01</span></h1>
+                <p class="subtitle">Hệ thống Rà soát Mã nguồn Tự động · Đồ án SE373 (UIT)</p>
+            </div>
+        </div>
+        <nav class="nav-tabs" role="tablist">
+            <button class="tab-btn active" data-tab="tab-studio" id="btn-tab-studio" role="tab">
+                <span class="icon">⚡</span> Review Studio
+            </button>
+            <button class="tab-btn" data-tab="tab-history" id="btn-tab-history" role="tab">
+                <span class="icon">📜</span> Hộp Đen Audit Log
+            </button>
+            <button class="tab-btn" data-tab="tab-benchmark" id="btn-tab-benchmark" role="tab">
+                <span class="icon">🎯</span> Benchmark 10 Cases
+            </button>
+        </nav>
+    </header>
+
+    <!-- KHUNG CHÍNH -->
+    <main class="main-container">
+        <!-- ========================================================= -->
+        <!-- TAB 1: REVIEW STUDIO (TRỌNG TÂM TƯƠNG TÁC) -->
+        <!-- ========================================================= -->
+        <section class="tab-pane active" id="tab-studio">
+            <div class="studio-grid">
+                <!-- CỘT TRÁI: ĐẦU VÀO VÀ CẤU HÌNH -->
+                <div class="input-panel card glass">
+                    <div class="panel-header">
+                        <h2>📥 Dữ Liệu Đầu Vào Git Diff</h2>
+                        <span class="panel-tag">Input Source</span>
+                    </div>
+
+                    <!-- CHỌN KỊCH BẢN DIFF MẪU -->
+                    <div class="form-group">
+                        <label for="select-preset">Chọn Kịch Bản Test Mẫu (10 Cases):</label>
+                        <select id="select-preset" class="select-input">
+                            <option value="">-- Đang nạp danh sách 10 ca kiểm thử... --</option>
+                        </select>
+                    </div>
+
+                    <!-- THÔNG TIN PHỤ TRỢ PR -->
+                    <div class="pr-meta-row">
+                        <div class="form-group flex-1">
+                            <label for="input-pr">PR #:</label>
+                            <input type="number" id="input-pr" value="42" class="text-input" min="1">
+                        </div>
+                        <div class="form-group flex-2">
+                            <label for="input-repo">Repository:</label>
+                            <input type="text" id="input-repo" value="uit/cafe-song-han" class="text-input">
+                        </div>
+                    </div>
+
+                    <!-- CHẾ ĐỘ CHẠY (MOCK HOẶC LIVE) -->
+                    <div class="mode-toggle-card">
+                        <div class="mode-info">
+                            <span class="mode-label">Chế độ thực thi:</span>
+                            <span class="mode-desc" id="mode-desc-text">Mock Offline (Chạy siêu tốc không tốn tiền API)</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-mock" checked>
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+
+                    <!-- KHUNG NHẬP GIT DIFF -->
+                    <div class="form-group">
+                        <div class="label-with-badge">
+                            <label for="diff-editor">Nội Dung Git Diff Patch:</label>
+                            <span id="diff-lines-count" class="badge-lines">0 dòng</span>
+                        </div>
+                        <textarea id="diff-editor" class="diff-textarea" placeholder="Dán nội dung git diff thô tại đây (hoặc chọn 1 trong 10 mẫu ở trên)..."></textarea>
+                    </div>
+
+                    <!-- NÚT KHỞI CHẠY REVIEW -->
+                    <button id="btn-run-review" class="btn-primary glow-btn">
+                        <span class="btn-icon">⚡</span> Khởi Chạy Code Review Agent
+                    </button>
+                </div>
+
+                <!-- CỘT PHẢI: KẾT QUẢ ĐÁNH GIÁ CỦA AGENT -->
+                <div class="output-panel card glass">
+                    <div class="panel-header">
+                        <h2>⚖️ Kết Quả Kiểm Định & Phán Quyết</h2>
+                        <span class="panel-tag" id="run-status-badge">Chờ khởi chạy</span>
+                    </div>
+
+                    <!-- TRẠNG THÁI CHỜ BAN ĐẦU -->
+                    <div id="empty-state" class="empty-state">
+                        <div class="empty-icon">🛡️</div>
+                        <h3>Sẵn Sàng Rà Soát Mã Nguồn</h3>
+                        <p>Chọn một trong 10 kịch bản mẫu ở cột bên trái hoặc dán git diff của bạn vào, sau đó nhấn <strong>Khởi Chạy Code Review Agent</strong>.</p>
+                    </div>
+
+                    <!-- TRẠNG THÁI LOADING ANIMATION -->
+                    <div id="loading-state" class="loading-state" style="display: none;">
+                        <div class="loading-spinner"></div>
+                        <h3 id="loading-step-title">Agent đang suy luận qua 4 trạm LangGraph...</h3>
+                        <div class="stepper-track">
+                            <div class="step-dot active" title="Trạm 1: Parse Git Diff">1. Parse</div>
+                            <div class="step-dot active" title="Trạm 2: Guardrail Token Check">2. Guard</div>
+                            <div class="step-dot active" title="Trạm 3: LLM ReAct & Self-Correction">3. Review</div>
+                            <div class="step-dot active" title="Trạm 4: Harness AST Validator">4. Validate</div>
+                        </div>
+                    </div>
+
+                    <!-- KHUNG KẾT QUẢ REVIEW (XUẤT HIỆN SAU KHI XONG) -->
+                    <div id="results-container" class="results-container" style="display: none;">
+                        <!-- BANNER PHÁN QUYẾT TỔNG THỂ -->
+                        <div id="verdict-banner" class="verdict-banner">
+                            <div class="verdict-badge-box">
+                                <span id="verdict-icon" class="verdict-icon">🛑</span>
+                                <div>
+                                    <h3 id="verdict-title">REQUEST CHANGES</h3>
+                                    <p id="verdict-subtitle">Yêu cầu sửa đổi trước khi merge</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TÓM TẮT CỦA AI -->
+                        <div class="summary-card">
+                            <h4>📝 Tóm tắt phát hiện:</h4>
+                            <p id="summary-text">...</p>
+                        </div>
+
+                        <!-- THANH HIỆU NĂNG KIỂM TOÁN (LATENCY & TOKENS) -->
+                        <div class="metrics-grid">
+                            <div class="metric-item">
+                                <span class="metric-label">⏱️ Độ trễ tổng:</span>
+                                <span class="metric-val" id="metric-latency">0 ms</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">🪙 Token tiêu thụ:</span>
+                                <span class="metric-val" id="metric-tokens">0</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="metric-label">🛡️ Lỗi hợp lệ / Tổng:</span>
+                                <span class="metric-val" id="metric-findings-count">0</span>
+                            </div>
+                        </div>
+
+                        <!-- DANH SÁCH FINDINGS -->
+                        <div class="findings-wrapper">
+                            <h4 class="findings-heading">Chi tiết các lỗi phát hiện (Inline Findings):</h4>
+                            <div id="findings-list" class="findings-list">
+                                <!-- Các thẻ finding được chèn bằng JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================================= -->
+        <!-- TAB 2: HỘP ĐEN GHI VẾT AUDIT LOG (K7 OBSERVABILITY) -->
+        <!-- ========================================================= -->
+        <section class="tab-pane" id="tab-history">
+            <div class="card glass">
+                <div class="panel-header">
+                    <h2>📜 Lịch Sử Các Phiên Chạy Kiểm Toán (StepLogger Audit Logs)</h2>
+                    <button id="btn-refresh-history" class="btn-secondary">🔄 Làm mới</button>
+                </div>
+                <p class="section-desc">Toàn bộ vết chạy được lưu vết bất biến định dạng JSONL trong thư mục <code>logs/</code> để phục vụ khả năng quan sát (K7) và tái lập kết quả.</p>
+                <div class="table-responsive">
+                    <table class="data-table" id="history-table">
+                        <thead>
+                            <tr>
+                                <th>Thời Gian</th>
+                                <th>Mã Phiên Chạy (Run ID)</th>
+                                <th>Số Bước</th>
+                                <th>Độ Trễ</th>
+                                <th>Token</th>
+                                <th>Trạng Thái</th>
+                                <th>Bước Cuối Cùng</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody">
+                            <tr><td colspan="7" class="text-center">Đang nạp dữ liệu lịch sử...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================================= -->
+        <!-- TAB 3: BENCHMARK 10 KỊCH BẢN (K8 EVALUATION) -->
+        <!-- ========================================================= -->
+        <section class="tab-pane" id="tab-benchmark">
+            <div class="benchmark-dashboard">
+                <!-- 4 THẺ CHỈ SỐ KPI VÀNG -->
+                <div class="kpi-grid">
+                    <div class="kpi-card glass glow-emerald">
+                        <span class="kpi-icon">🎯</span>
+                        <div class="kpi-data">
+                            <span class="kpi-number" id="kpi-precision">100.0%</span>
+                            <span class="kpi-title">Precision (Độ chính xác)</span>
+                            <span class="kpi-sub">Mục tiêu: >= 50.0% (Đạt chuẩn)</span>
+                        </div>
+                    </div>
+                    <div class="kpi-card glass glow-cyan">
+                        <span class="kpi-icon">📡</span>
+                        <div class="kpi-data">
+                            <span class="kpi-number" id="kpi-recall">100.0%</span>
+                            <span class="kpi-title">Recall (Độ bao phủ)</span>
+                            <span class="kpi-sub">Mục tiêu: >= 50.0% (Đạt chuẩn)</span>
+                        </div>
+                    </div>
+                    <div class="kpi-card glass glow-purple">
+                        <span class="kpi-icon">📍</span>
+                        <div class="kpi-data">
+                            <span class="kpi-number" id="kpi-line">100.0%</span>
+                            <span class="kpi-title">Độ chính xác dòng (±3 dòng)</span>
+                            <span class="kpi-sub">Mục tiêu: >= 80.0% (Đạt chuẩn)</span>
+                        </div>
+                    </div>
+                    <div class="kpi-card glass glow-blue">
+                        <span class="kpi-icon">🛡️</span>
+                        <div class="kpi-data">
+                            <span class="kpi-number" id="kpi-clean">0.0</span>
+                            <span class="kpi-title">Major trên PR Sạch</span>
+                            <span class="kpi-sub">Mục tiêu: <= 2.0 lỗi/PR (Đạt chuẩn)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BẢNG ĐỐI CHIẾU 10 CA TEST -->
+                <div class="card glass mt-4">
+                    <div class="panel-header">
+                        <h2>📊 Bảng Đối Soát 10 Kịch Bản Benchmark (Ground Truth)</h2>
+                        <span class="badge-status-pass">10/10 PASS XUẤT SẮC</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table" id="benchmark-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Tên Kịch Bản</th>
+                                    <th>Phân Loại</th>
+                                    <th>Kỳ Vọng Phán Quyết</th>
+                                    <th>Kết Quả Agent</th>
+                                    <th>Trạng Thái</th>
+                                </tr>
+                            </thead>
+                            <tbody id="benchmark-tbody">
+                                <tr><td colspan="6" class="text-center">Đang nạp dữ liệu...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- TOAST NOTIFICATION -->
+    <div id="toast" class="toast">Đã sao chép vào bộ nhớ tạm!</div>
+
+    <script src="app.js"></script>
+</body>
+</html>

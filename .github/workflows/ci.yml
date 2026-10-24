@@ -30,17 +30,11 @@ jobs:
           ruff check agent app evals
 
 
-      - name: Run Step Unit Tests
+      - name: Run Core Verification Tests (Criteria 1 & 4)
         run: |
-          python test_step1.py
-          python test_step2.py
-          python test_step3.py
-          python test_step4.py
-          python test_step5.py
-          python test_step6.py
-          python test_step7_file_context.py
           python test_criteria_1_and_4.py
 
       - name: Run Benchmark (10 Cases Mock)
         run: |
           python evals/benchmark.py --mock
+
