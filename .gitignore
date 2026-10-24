@@ -105,4 +105,6 @@ reference/
 
 # === LOCAL STEP TESTS (KEEP LOCAL ONLY) ===
 test_step*.py
+demo_target/
+
 
